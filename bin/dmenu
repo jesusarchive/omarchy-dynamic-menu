@@ -71,11 +71,14 @@ done_file=$(mktemp)
 rm -f "$done_file"
 trap 'rm -f "$selection_file" "$done_file" "$done_file.tmp"' EXIT
 
+shell_json="$HOME/.config/omarchy/shell.json"
 style=$(jq -r '[.plugins[]? | objects | select(.id == "jesusarchive.dynamic-menu") | .style][0] // "omarchy"' \
-  "$HOME/.config/omarchy/shell.json" 2>/dev/null || echo omarchy)
+  "$shell_json" 2>/dev/null || echo omarchy)
+bar_position=$(jq -r '.bar.position // "top"' "$shell_json" 2>/dev/null || echo top)
 
 payload=$(jq -Rn \
   --arg style "$style" \
+  --arg barPosition "$bar_position" \
   --arg prompt "$prompt" \
   --arg font "$font" \
   --arg normBg "$norm_bg" \
@@ -88,7 +91,7 @@ payload=$(jq -Rn \
   --argjson caseInsensitive "$case_insensitive" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
-  '{ style: $style, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
+  '{ style: $style, barPosition: $barPosition, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
      selBg: $selBg, selFg: $selFg, lines: $lines, monitor: $monitor,
      bottom: $bottom, caseInsensitive: $caseInsensitive, items: [inputs],
      selectionFile: $selectionFile, doneFile: $doneFile }')

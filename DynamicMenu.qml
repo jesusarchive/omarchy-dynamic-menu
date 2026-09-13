@@ -51,9 +51,14 @@ Item {
 
   property font menuFont: root.parseFont(root.fontSpec)
   // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
+  // That is also dwm's bar height, so dmenu sits exactly over dwm's bar. The
+  // Omarchy style does the same with the Omarchy bar: rows are as tall as a
+  // horizontal bar. A bar on the side has no height to match.
+  property string barPosition: "top"
   readonly property int fontHeight: Math.ceil(metrics.ascent) + Math.ceil(metrics.descent)
   readonly property int lrpad: fontHeight
-  readonly property int bh: fontHeight + 2
+  readonly property bool matchBar: omarchyStyle && (barPosition === "top" || barPosition === "bottom")
+  readonly property int bh: matchBar ? Math.max(Style.bar.sizeHorizontal, fontHeight + 2) : fontHeight + 2
 
   FontMetrics {
     id: metrics
@@ -99,6 +104,7 @@ Item {
     root.atBottom = payload.bottom === true
     root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
     root.style = payload.style === "dmenu" ? "dmenu" : "omarchy"
+    root.barPosition = String(payload.barPosition || "top")
     root.fontSpec = String(payload.font || "")
     root.normBgSpec = String(payload.normBg || "")
     root.normFgSpec = String(payload.normFg || "")
@@ -298,13 +304,14 @@ Item {
       }
     }
 
-    // dmenu's cursor: 2px wide, bh - 4 tall, 2px from the top.
+    // dmenu's cursor: 2px wide, bh - 4 tall, 2px from the top. Rows can be
+    // taller than the font here, so keep that size and centre it.
     Rectangle {
       visible: root.view !== null && root.view.cursor.visible
       x: root.view ? root.view.cursor.x : 0
-      y: 2
+      y: Math.round((root.bh - (root.fontHeight - 2)) / 2)
       width: 2
-      height: root.bh - 4
+      height: root.fontHeight - 2
       color: root.normFg
     }
   }
