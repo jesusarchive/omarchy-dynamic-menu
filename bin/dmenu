@@ -1,8 +1,10 @@
 #!/bin/bash
 
 # dmenu for the Omarchy shell: reads items from stdin, prints the pick.
-# Takes suckless dmenu's flags. Without -fn/-nb/-nf/-sb/-sf the Omarchy theme
-# styles the menu. -f and -w (X11 window embedding) are accepted and ignored.
+# Takes suckless dmenu's flags. Colors and font follow the Omarchy theme, or
+# dmenu's own defaults with "style": "dmenu" on the plugin's entry in
+# ~/.config/omarchy/shell.json. -fn/-nb/-nf/-sb/-sf override either.
+# -f and -w (X11 window embedding) are accepted and ignored.
 
 set -euo pipefail
 
@@ -69,7 +71,11 @@ done_file=$(mktemp)
 rm -f "$done_file"
 trap 'rm -f "$selection_file" "$done_file" "$done_file.tmp"' EXIT
 
+style=$(jq -r '[.plugins[]? | objects | select(.id == "jesusarchive.dynamic-menu") | .style][0] // "omarchy"' \
+  "$HOME/.config/omarchy/shell.json" 2>/dev/null || echo omarchy)
+
 payload=$(jq -Rn \
+  --arg style "$style" \
   --arg prompt "$prompt" \
   --arg font "$font" \
   --arg normBg "$norm_bg" \
@@ -82,7 +88,7 @@ payload=$(jq -Rn \
   --argjson caseInsensitive "$case_insensitive" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
-  '{ prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
+  '{ style: $style, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
      selBg: $selBg, selFg: $selFg, lines: $lines, monitor: $monitor,
      bottom: $bottom, caseInsensitive: $caseInsensitive, items: [inputs],
      selectionFile: $selectionFile, doneFile: $doneFile }')

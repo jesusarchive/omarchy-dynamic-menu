@@ -30,22 +30,24 @@ Item {
   property string selectionFile: ""
   property string doneFile: ""
 
-  // -fn, -nb, -nf, -sb, -sf. Empty means the Omarchy theme.
+  // Defaults come from `style`: "omarchy" (default) is the current Omarchy
+  // theme, "dmenu" is config.def.h from dmenu 5.4. -fn, -nb, -nf, -sb and -sf
+  // override either, as they override config.def.h in dmenu.
+  property string style: "omarchy"
+  readonly property bool omarchyStyle: style === "omarchy"
   property string fontSpec: ""
   property string normBgSpec: ""
   property string normFgSpec: ""
   property string selBgSpec: ""
   property string selFgSpec: ""
-  readonly property bool colorFlags: normBgSpec !== "" || normFgSpec !== "" || selBgSpec !== "" || selFgSpec !== ""
 
-  property color normBg: normBgSpec || Color.menu.background
-  property color normFg: normFgSpec || Color.menu.text
-  property color selBg: selBgSpec || Color.menu.selectedBackground
-  property color selFg: selFgSpec || Color.menu.selectedText
-  // dmenu's SchemeOut has no flag; the theme accent stands in unless the
-  // caller brought its own colors.
-  property color outBg: colorFlags ? "#00ffff" : Color.accent
-  property color outFg: colorFlags ? "#000000" : Color.menu.background
+  property color normBg: normBgSpec || (omarchyStyle ? Color.menu.background : "#222222")
+  property color normFg: normFgSpec || (omarchyStyle ? Color.menu.text : "#bbbbbb")
+  property color selBg: selBgSpec || (omarchyStyle ? Color.menu.selectedBackground : "#005577")
+  property color selFg: selFgSpec || (omarchyStyle ? Color.menu.selectedText : "#eeeeee")
+  // SchemeOut, for items printed with Ctrl+Return, has no flag.
+  property color outBg: omarchyStyle ? Color.accent : "#00ffff"
+  property color outFg: omarchyStyle ? Color.menu.background : "#000000"
 
   property font menuFont: root.parseFont(root.fontSpec)
   // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
@@ -58,8 +60,10 @@ Item {
     font: root.menuFont
   }
 
-  // A fontconfig pattern like dwm's "monospace:size=10", or "Family-10".
+  // A fontconfig pattern like dmenu's "monospace:size=10", or "Family-10".
+  // Without -fn: the style's font.
   function parseFont(spec) {
+    if (!spec && !root.omarchyStyle) spec = "monospace:size=10"
     var family = Style.font.menuFamily
     var pixelSize = Style.font.body
     var pointSize = 0
@@ -94,6 +98,7 @@ Item {
 
     root.atBottom = payload.bottom === true
     root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
+    root.style = payload.style === "dmenu" ? "dmenu" : "omarchy"
     root.fontSpec = String(payload.font || "")
     root.normBgSpec = String(payload.normBg || "")
     root.normFgSpec = String(payload.normFg || "")
