@@ -29,26 +29,6 @@ printf 'yes\nno\n' | dmenu -p 'Reboot?'
 omarchy plugin add https://github.com/jesusarchive/omarchy-dynamic-menu.git --enable
 ```
 
-Put the commands on your `$PATH`, so keybindings and scripts can call `dmenu`
-by name:
-
-```bash
-plugin=~/.config/omarchy/plugins/jesusarchive.dynamic-menu
-ln -s "$plugin/bin/dmenu" "$plugin/bin/dmenu_run" "$plugin/bin/dmenu_path" ~/.local/bin/
-```
-
-### Keybinding
-
-The plugin doesn't bind any keys. To launch programs with `dmenu_run`, add a
-binding to `~/.config/hypr/bindings.lua`, picking any free chord:
-
-```lua
-o.bind("SUPER + D", "Dynamic menu", "dmenu_run")
-```
-
-If the chord is already taken, unbind it first with `hl.unbind("SUPER + D")`.
-Hyprland reloads the file on save; `hyprctl configerrors` shows any mistakes.
-
 Manual install from a checkout:
 
 ```bash
@@ -61,8 +41,40 @@ omarchy plugin enable jesusarchive.dynamic-menu
 Requirements: `bash`, `jq` and `wl-paste` (wl-clipboard). All three ship with
 Omarchy.
 
-To remove it, run `omarchy plugin disable jesusarchive.dynamic-menu`, then delete
-the `~/.local/bin` links and your keybinding.
+### Keybinding
+
+The plugin doesn't bind any keys. To launch programs with `dmenu_run`, add a
+binding to `~/.config/hypr/bindings.lua`, picking any free chord:
+
+```lua
+o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
+```
+
+If the chord is already taken, unbind it first with `hl.unbind("SUPER + D")`.
+Hyprland reloads the file on save; `hyprctl configerrors` shows any mistakes.
+
+### Scripts that call `dmenu` by name
+
+Tools and scripts written for dmenu run `dmenu` from your `$PATH`. The plugin
+lives in `~/.config/omarchy/plugins/`, which isn't on it, so link the commands
+into `~/.local/bin` once:
+
+```bash
+~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/link-commands
+```
+
+It links `dmenu`, `dmenu_run` and `dmenu_path`, and leaves alone any existing
+file of the same name that isn't one of its links. Skip this if you only use the
+keybinding.
+
+### Remove
+
+```bash
+~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/link-commands --remove
+omarchy plugin remove jesusarchive.dynamic-menu
+```
+
+Then delete your keybinding from `bindings.lua`.
 
 ## Use
 
@@ -187,6 +199,7 @@ printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 - `DynamicMenu.qml`: the bar
 - `Engine.js`, `Match.js`: dmenu's logic
 - `bin/dmenu`, `bin/dmenu_run`, `bin/dmenu_path`
+- `bin/link-commands`: optional links into `~/.local/bin`
 - `tests/`
 
 ## License

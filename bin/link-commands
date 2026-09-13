@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# link-commands [--remove]: put dmenu, dmenu_run and dmenu_path on $PATH for
+# scripts that call them by name, as symlinks in ~/.local/bin. Only needed for
+# those scripts; a keybinding can run bin/dmenu_run by its full path.
+#
+# Existing files that aren't links into this plugin are left alone.
+
+set -euo pipefail
+
+bin="$(dirname "$(readlink -f "$0")")"
+target="${XDG_BIN_HOME:-$HOME/.local/bin}"
+commands=(dmenu dmenu_run dmenu_path)
+
+case "${1-}" in
+  "")
+    mkdir -p "$target"
+    for name in "${commands[@]}"; do
+      link="$target/$name"
+      if [[ -L $link && $(readlink -f "$link") == "$bin/$name" ]]; then
+        echo "$link already links here"
+      elif [[ -e $link || -L $link ]]; then
+        echo "$link exists and isn't ours, leaving it" >&2
+      else
+        ln -s "$bin/$name" "$link"
+        echo "linked $link"
+      fi
+    done
+    case ":$PATH:" in
+      *":$target:"*) ;;
+      *) echo "note: $target is not on your \$PATH" >&2 ;;
+    esac
+    ;;
+  --remove)
+    for name in "${commands[@]}"; do
+      link="$target/$name"
+      if [[ -L $link && $(readlink -f "$link") == "$bin/$name" ]]; then
+        rm "$link"
+        echo "removed $link"
+      fi
+    done
+    ;;
+  *)
+    echo "usage: link-commands [--remove]" >&2
+    exit 1
+    ;;
+esac
