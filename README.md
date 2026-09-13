@@ -43,15 +43,40 @@ Omarchy.
 
 ### Keybinding
 
-The plugin doesn't bind any keys. To launch programs with `dmenu_run`, add a
-binding to `~/.config/hypr/bindings.lua`, picking any free chord:
+Omarchy plugins don't bind keys themselves, so add the binding to
+`~/.config/hypr/bindings.lua`. The suggested key is **Super+D**, which is free
+in a stock Omarchy setup:
 
 ```lua
 o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
 ```
 
-If the chord is already taken, unbind it first with `hl.unbind("SUPER + D")`.
-Hyprland reloads the file on save; `hyprctl configerrors` shows any mistakes.
+Hyprland reloads the file on save, and the binding shows up in Omarchy's
+keybindings list (Super+K) as "Dynamic menu".
+
+#### Changing the key
+
+1. Pick a free chord. List what's already bound with Super+K, or:
+
+   ```bash
+   omarchy menu keybindings --print
+   ```
+
+2. Change the first argument of the `o.bind` line, for example to
+   `"SUPER + ALT + D"`. Modifiers are `SUPER`, `SHIFT`, `CTRL` and `ALT`, joined
+   with ` + `.
+3. To use a chord that Omarchy or another plugin already binds, unbind it first,
+   on the line before yours:
+
+   ```lua
+   hl.unbind("SUPER + SPACE")
+   o.bind("SUPER + SPACE", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
+   ```
+
+4. Save, then check for mistakes with `hyprctl configerrors`.
+
+The command can take dmenu flags too, for example
+`".../bin/dmenu_run -i -p run"` for case-insensitive matching with a prompt.
 
 ### Scripts that call `dmenu` by name
 
