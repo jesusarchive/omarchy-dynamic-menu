@@ -6,6 +6,8 @@ top of the screen: lines piped in on stdin become the items, and your pick is
 printed to stdout. It runs inside `omarchy-shell` and follows your Omarchy theme.
 Plugin ID: `jesusarchive.dynamic-menu`. MIT licensed.
 
+![dmenu_run over the Omarchy bar](assets/screenshot.png)
+
 ```bash
 printf 'yes\nno\n' | dmenu -p 'Reboot?'
 ```
@@ -72,6 +74,8 @@ dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]
 
 Exit status is 0 when something was printed with Return, and 1 when the menu was
 closed with Escape.
+
+![A vertical list with -l 5 -p System](assets/screenshot-list.png)
 
 **Matching:** each space-separated word you type has to appear in the item.
 Items equal to the whole input come first, then items starting with the first

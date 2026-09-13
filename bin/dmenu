@@ -96,7 +96,9 @@ payload=$(jq -Rn \
      bottom: $bottom, caseInsensitive: $caseInsensitive, items: [inputs],
      selectionFile: $selectionFile, doneFile: $doneFile }')
 
-if ! omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null; then
+# omarchy-shell gives up after 2 s by default. The first summon after the
+# plugin is (re)loaded can take longer than that.
+if ! OMARCHY_SHELL_IPC_TIMEOUT=10s omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null; then
   echo "dmenu: could not reach the Omarchy shell" >&2
   exit 1
 fi
