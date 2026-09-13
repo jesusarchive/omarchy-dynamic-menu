@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Pick a program from $PATH and run it, like dmenu's dmenu_run.
+# Siblings are called by path, through bash, so a keybinding works even when
+# Hyprland's $PATH doesn't reach them or a copy lost its executable bits.
+
+bin="$(dirname "$(readlink -f "$0")")"
+
+bash "$bin/dmenu_path" | bash "$bin/dmenu" "$@" | "${SHELL:-/bin/sh}" &

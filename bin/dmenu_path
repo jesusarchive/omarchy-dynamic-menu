@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Lists every executable on $PATH, like dmenu's dmenu_path. The list is cached
+# and only rebuilt when a $PATH directory has changed since the last run.
+# Stock dmenu uses its own `stest` for this; find does the same job here.
+
+cachedir="${XDG_CACHE_HOME:-$HOME/.cache}"
+cache="$cachedir/dmenu_run"
+mkdir -p "$cachedir"
+
+IFS=:
+stale=false
+if [[ ! -s $cache ]]; then
+  stale=true
+else
+  for dir in $PATH; do
+    if [[ -d $dir && $dir -nt $cache ]]; then
+      stale=true
+      break
+    fi
+  done
+fi
+
+if $stale; then
+  for dir in $PATH; do
+    [[ -d $dir ]] && find -L "$dir" -maxdepth 1 -type f -executable -printf '%f\n' 2>/dev/null
+  done | sort -u | tee "$cache"
+else
+  cat "$cache"
+fi
