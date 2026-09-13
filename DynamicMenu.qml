@@ -1,7 +1,9 @@
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
+import "Match.js" as Match
 
 Item {
   id: root
@@ -12,6 +14,10 @@ Item {
 
   property bool opened: false
   property string prompt: ""
+  property bool atBottom: false
+  property int monitor: -1
+  property bool caseInsensitive: false
+  property var menuScreen: null
   property var items: []
   property var matches: []
   property string filterText: ""
@@ -29,7 +35,8 @@ Item {
   property int itemPadding: Style.spacing.controlPaddingX
 
   // `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'` lands here.
-  // Payload: { prompt, items, selectionFile, doneFile }.
+  // Payload: { prompt, items, bottom, monitor, caseInsensitive, lines,
+  // selectionFile, doneFile }. `lines` (-l) is not drawn yet.
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
@@ -40,6 +47,11 @@ Item {
     if (root.doneFile) Quickshell.execDetached(["bash", "-c", ": > " + Util.shellQuote(root.doneFile)])
 
     root.prompt = String(payload.prompt || "")
+    root.atBottom = payload.bottom === true
+    root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
+    root.caseInsensitive = payload.caseInsensitive === true
+    var screen = root.targetScreen()
+    if (screen) root.menuScreen = screen
     root.items = Array.isArray(payload.items) ? payload.items.map(String) : []
     root.selectionFile = String(payload.selectionFile || "")
     root.doneFile = String(payload.doneFile || "")
@@ -77,7 +89,7 @@ Item {
 
   function setFilter(text) {
     root.filterText = text
-    root.matches = root.items.filter(function(item) { return item.indexOf(text) !== -1 })
+    root.matches = Match.match(root.items, text, root.caseInsensitive).map(function(i) { return root.items[i] })
     root.selectedIndex = 0
     itemRow.positionViewAtBeginning()
   }
@@ -88,10 +100,22 @@ Item {
     itemRow.positionViewAtIndex(root.selectedIndex, ListView.Contain)
   }
 
+  // -m picks a screen by index. Otherwise the menu goes where the focus is,
+  // like dmenu's default of the monitor holding the focused window.
+  function targetScreen() {
+    var screens = Quickshell.screens
+    if (root.monitor >= 0 && root.monitor < screens.length) return screens[root.monitor]
+    var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
+    for (var i = 0; i < screens.length; i++)
+      if (screens[i].name === focused) return screens[i]
+    return screens.length > 0 ? screens[0] : null
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
-    anchors { top: true; left: true; right: true }
+    screen: root.menuScreen
+    anchors { top: !root.atBottom; bottom: root.atBottom; left: true; right: true }
     implicitHeight: root.barHeight
     color: root.background
     WlrLayershell.namespace: "omarchy-dynamic-menu"
@@ -109,7 +133,10 @@ Item {
         if (event.key === Qt.Key_Escape) {
           root.finish(null)
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          if (root.matches.length > 0) root.finish(root.matches[root.selectedIndex])
+          // The selected item, or the typed text when nothing matches or
+          // Shift is held, as in dmenu.
+          var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+          root.finish(root.matches.length > 0 && !shift ? root.matches[root.selectedIndex] : root.filterText)
         } else if (event.key === Qt.Key_Left) {
           root.move(-1)
         } else if (event.key === Qt.Key_Right) {

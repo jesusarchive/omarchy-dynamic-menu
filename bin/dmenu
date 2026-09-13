@@ -1,21 +1,54 @@
 #!/bin/bash
 
 # dmenu for the Omarchy shell: reads items from stdin, prints the pick.
-# Exits 1 when cancelled or when there is nothing to pick from.
+# Takes suckless dmenu's flags. Fonts, colors and window embedding are accepted
+# and ignored: the Omarchy theme styles the menu.
 
 set -euo pipefail
 
-prompt=""
+usage() {
+  echo "usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]" >&2
+  echo "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]" >&2
+  exit 1
+}
 
+# C's atoi: leading whitespace, optional sign, digits; anything else reads as 0.
+atoi() {
+  if [[ $1 =~ ^[[:space:]]*([+-]?)([0-9]+) ]]; then
+    echo $(( ${BASH_REMATCH[1]}10#${BASH_REMATCH[2]} ))
+  else
+    echo 0
+  fi
+}
+
+prompt=""
+lines=0
+monitor=-1
+bottom=false
+case_insensitive=false
+
+# Same order of checks as dmenu's main(): flags without an argument first,
+# then a flag in last position is an error, then flags with one argument.
 while (( $# > 0 )); do
   case "$1" in
-    -p)
-      shift
-      prompt="${1-}"
+    -v)
+      bin="$(dirname "$(readlink -f "$0")")"
+      echo "dmenu-$(jq -r .version "$bin/../manifest.json")"
+      exit 0
       ;;
+    -b) bottom=true ;;
+    -f) ;;
+    -i) case_insensitive=true ;;
     *)
-      echo "usage: dmenu [-p prompt]" >&2
-      exit 1
+      (( $# == 1 )) && usage
+      case "$1" in
+        -l) lines=$(atoi "$2") ;;
+        -m) monitor=$(atoi "$2") ;;
+        -p) prompt="$2" ;;
+        -fn | -nb | -nf | -sb | -sf | -w) ;;
+        *) usage ;;
+      esac
+      shift
       ;;
   esac
   shift
@@ -28,9 +61,15 @@ trap 'rm -f "$selection_file" "$done_file"' EXIT
 
 payload=$(jq -Rn \
   --arg prompt "$prompt" \
+  --argjson lines "$lines" \
+  --argjson monitor "$monitor" \
+  --argjson bottom "$bottom" \
+  --argjson caseInsensitive "$case_insensitive" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
-  '{ prompt: $prompt, items: [inputs], selectionFile: $selectionFile, doneFile: $doneFile }')
+  '{ prompt: $prompt, lines: $lines, monitor: $monitor, bottom: $bottom,
+     caseInsensitive: $caseInsensitive, items: [inputs],
+     selectionFile: $selectionFile, doneFile: $doneFile }')
 
 omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null
 
