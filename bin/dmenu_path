@@ -9,21 +9,21 @@ cache="$cachedir/dmenu_run"
 mkdir -p "$cachedir"
 
 IFS=:
+# stest -dqr -n "$cache" $PATH: a readable PATH directory newer than the cache.
+# With no cache there is nothing to compare against, so every directory counts.
 stale=false
-if [[ ! -s $cache ]]; then
-  stale=true
-else
-  for dir in $PATH; do
-    if [[ -d $dir && $dir -nt $cache ]]; then
-      stale=true
-      break
-    fi
-  done
-fi
+for dir in $PATH; do
+  if [[ -d $dir && -r $dir && ( ! -e $cache || $dir -nt $cache ) ]]; then
+    stale=true
+    break
+  fi
+done
 
 if $stale; then
+  # stest -flx $PATH: regular files (links followed) you can execute, hidden
+  # names skipped.
   for dir in $PATH; do
-    [[ -d $dir ]] && find -L "$dir" -maxdepth 1 -type f -executable -printf '%f\n' 2>/dev/null
+    [[ -d $dir ]] && find -L "$dir" -mindepth 1 -maxdepth 1 ! -name '.*' -type f -executable -printf '%f\n' 2>/dev/null
   done | sort -u | tee "$cache"
 else
   cat "$cache"

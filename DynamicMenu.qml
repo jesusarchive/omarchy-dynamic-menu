@@ -1,10 +1,14 @@
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
 import "Match.js" as Match
+import "Engine.js" as Engine
 
+// The dmenu bar. Engine.js does what dmenu.c does (input, matching, pages);
+// this file draws its layout and hands it keys.
 Item {
   id: root
 
@@ -13,91 +17,110 @@ Item {
   property var manifest: null
 
   property bool opened: false
-  property string prompt: ""
+  property var menu: null
+  property int revision: 0
+  property var view: {
+    root.revision
+    return root.menu ? Engine.layout(root.menu) : null
+  }
+
   property bool atBottom: false
   property int monitor: -1
-  property bool caseInsensitive: false
   property var menuScreen: null
-  property var items: []
-  property var matches: []
-  property string filterText: ""
-  property int selectedIndex: 0
   property string selectionFile: ""
   property string doneFile: ""
 
-  property color background: Color.menu.background
-  property color foreground: Color.menu.text
-  property color selectedBackground: Color.menu.selectedBackground
-  property color selectedText: Color.menu.selectedText
-  property string fontFamily: Style.font.menuFamily
-  property int fontSize: Style.font.body
-  property int barHeight: fontSize + Style.spacing.controlPaddingY * 2
-  property int itemPadding: Style.spacing.controlPaddingX
+  // -fn, -nb, -nf, -sb, -sf. Empty means the Omarchy theme.
+  property string fontSpec: ""
+  property string normBgSpec: ""
+  property string normFgSpec: ""
+  property string selBgSpec: ""
+  property string selFgSpec: ""
+  readonly property bool colorFlags: normBgSpec !== "" || normFgSpec !== "" || selBgSpec !== "" || selFgSpec !== ""
+
+  property color normBg: normBgSpec || Color.menu.background
+  property color normFg: normFgSpec || Color.menu.text
+  property color selBg: selBgSpec || Color.menu.selectedBackground
+  property color selFg: selFgSpec || Color.menu.selectedText
+  // dmenu's SchemeOut has no flag; the theme accent stands in unless the
+  // caller brought its own colors.
+  property color outBg: colorFlags ? "#00ffff" : Color.accent
+  property color outFg: colorFlags ? "#000000" : Color.menu.background
+
+  property font menuFont: root.parseFont(root.fontSpec)
+  // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
+  readonly property int fontHeight: Math.ceil(metrics.ascent) + Math.ceil(metrics.descent)
+  readonly property int lrpad: fontHeight
+  readonly property int bh: fontHeight + 2
+
+  FontMetrics {
+    id: metrics
+    font: root.menuFont
+  }
+
+  // A fontconfig pattern like dwm's "monospace:size=10", or "Family-10".
+  function parseFont(spec) {
+    var family = Style.font.menuFamily
+    var pixelSize = Style.font.body
+    var pointSize = 0
+    var parts = String(spec || "").split(":")
+    if (parts[0]) {
+      var sized = parts[0].match(/^(.*)-(\d+(?:\.\d+)?)$/)
+      family = sized ? sized[1] : parts[0]
+      if (sized) pointSize = Number(sized[2])
+    }
+    for (var i = 1; i < parts.length; i++) {
+      var kv = parts[i].split("=")
+      if (kv[0] === "size") pointSize = Number(kv[1])
+      else if (kv[0] === "pixelsize") { pixelSize = Number(kv[1]); pointSize = 0 }
+    }
+    return pointSize > 0
+      ? Qt.font({ family: family, pointSize: pointSize })
+      : Qt.font({ family: family, pixelSize: pixelSize })
+  }
+
+  function textw(str) {
+    return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
+  }
 
   // `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'` lands here.
-  // Payload: { prompt, items, bottom, monitor, caseInsensitive, lines,
-  // selectionFile, doneFile }. `lines` (-l) is not drawn yet.
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
 
-    // A new request while one is pending cancels the old caller. Only its done
-    // file is touched: hiding here would come back through close() and cancel
-    // the new request too.
-    if (root.doneFile) Quickshell.execDetached(["bash", "-c", ": > " + Util.shellQuote(root.doneFile)])
+    // A new request while one is pending cancels the old caller, without
+    // hiding: that would come back through close() and cancel this one too.
+    if (root.doneFile) root.writeExit(root.doneFile, 1)
 
-    root.prompt = String(payload.prompt || "")
     root.atBottom = payload.bottom === true
     root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
-    root.caseInsensitive = payload.caseInsensitive === true
-    var screen = root.targetScreen()
-    if (screen) root.menuScreen = screen
-    root.items = Array.isArray(payload.items) ? payload.items.map(String) : []
+    root.fontSpec = String(payload.font || "")
+    root.normBgSpec = String(payload.normBg || "")
+    root.normFgSpec = String(payload.normFg || "")
+    root.selBgSpec = String(payload.selBg || "")
+    root.selFgSpec = String(payload.selFg || "")
     root.selectionFile = String(payload.selectionFile || "")
     root.doneFile = String(payload.doneFile || "")
-    root.setFilter("")
+
+    var screen = root.targetScreen()
+    if (screen) root.menuScreen = screen
+
+    root.menu = Engine.create(Array.isArray(payload.items) ? payload.items : [], {
+      lines: Number.isInteger(payload.lines) ? payload.lines : 0,
+      caseInsensitive: payload.caseInsensitive === true,
+      prompt: String(payload.prompt || ""),
+      textw: root.textw,
+      lrpad: root.lrpad,
+      mw: screen ? screen.width : panel.width,
+      match: Match.match
+    })
+    root.revision++
     root.opened = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function close() {
-    root.finish(null)
-  }
-
-  function dismiss() {
-    root.opened = false
-    if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
-  }
-
-  // Writes the pick for bin/dmenu, then touches the done file it waits on.
-  // null means cancelled: done file only, so the caller exits 1.
-  function finish(selection) {
-    var selectionFile = root.selectionFile
-    var doneFile = root.doneFile
-    root.selectionFile = ""
-    root.doneFile = ""
-    root.opened = false
-    if (!doneFile) return
-
-    var script = ": > " + Util.shellQuote(doneFile)
-    if (selection !== null && selection !== undefined)
-      script = "printf '%s\\n' " + Util.shellQuote(selection) + " > " + Util.shellQuote(selectionFile) + "; " + script
-    Quickshell.execDetached(["bash", "-c", script])
-    root.dismiss()
-  }
-
-  function setFilter(text) {
-    root.filterText = text
-    root.matches = Match.match(root.items, text, root.caseInsensitive).map(function(i) { return root.items[i] })
-    root.selectedIndex = 0
-    itemRow.positionViewAtBeginning()
-  }
-
-  function move(delta) {
-    if (root.matches.length === 0) return
-    root.selectedIndex = Math.max(0, Math.min(root.matches.length - 1, root.selectedIndex + delta))
-    itemRow.positionViewAtIndex(root.selectedIndex, ListView.Contain)
+    root.finish(1)
   }
 
   // -m picks a screen by index. Otherwise the menu goes where the focus is,
@@ -111,17 +134,110 @@ Item {
     return screens.length > 0 ? screens[0] : null
   }
 
+  // Results go to bin/dmenu through files: each printed line is appended to
+  // the selection file, and the exit status lands in the done file last.
+  // Writes run one at a time so they arrive in order.
+  property var writes: []
+
+  function queueWrite(script) {
+    root.writes.push(script)
+    root.runNextWrite()
+  }
+
+  function runNextWrite() {
+    if (writer.running || root.writes.length === 0) return
+    writer.command = ["bash", "-c", root.writes.shift()]
+    writer.running = true
+  }
+
+  function printLine(line) {
+    if (!root.selectionFile) return
+    root.queueWrite("printf '%s\\n' " + Util.shellQuote(line) + " >> " + Util.shellQuote(root.selectionFile))
+  }
+
+  function writeExit(doneFile, status) {
+    var tmp = Util.shellQuote(doneFile + ".tmp")
+    root.queueWrite("printf '%s' " + status + " > " + tmp + " && mv " + tmp + " " + Util.shellQuote(doneFile))
+  }
+
+  function finish(status) {
+    var doneFile = root.doneFile
+    root.opened = false
+    if (!doneFile) return
+    root.doneFile = ""
+    root.writeExit(doneFile, status)
+    root.selectionFile = ""
+    if (root.shell && typeof root.shell.hide === "function")
+      root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
+  }
+
+  Process {
+    id: writer
+    onExited: Qt.callLater(root.runNextWrite)
+  }
+
+  Process {
+    id: pasteProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!root.menu || !root.opened) return
+        Engine.paste(root.menu, text)
+        root.revision++
+      }
+    }
+  }
+
+  // Qt key event → the keysym names Engine.keypress() expects.
+  function keyName(event) {
+    var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    if (event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {
+      var letter = String.fromCharCode(event.key)
+      return shift ? letter : letter.toLowerCase()
+    }
+    switch (event.key) {
+    case Qt.Key_Return:
+    case Qt.Key_Enter: return "Return"
+    case Qt.Key_Escape: return "Escape"
+    case Qt.Key_Tab: return "Tab"
+    case Qt.Key_Backspace: return "BackSpace"
+    case Qt.Key_Delete: return "Delete"
+    case Qt.Key_Home: return "Home"
+    case Qt.Key_End: return "End"
+    case Qt.Key_Left: return "Left"
+    case Qt.Key_Right: return "Right"
+    case Qt.Key_Up: return "Up"
+    case Qt.Key_Down: return "Down"
+    case Qt.Key_PageUp: return "Prior"
+    case Qt.Key_PageDown: return "Next"
+    case Qt.Key_BracketLeft: return "bracketleft"
+    }
+    return ""
+  }
+
+  function colorsFor(scheme) {
+    if (scheme === "sel") return [root.selFg, root.selBg]
+    if (scheme === "out") return [root.outFg, root.outBg]
+    return [root.normFg, root.normBg]
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
     screen: root.menuScreen
     anchors { top: !root.atBottom; bottom: root.atBottom; left: true; right: true }
-    implicitHeight: root.barHeight
-    color: root.background
+    implicitHeight: (root.view ? root.view.rows : 1) * root.bh
+    color: root.normBg
     WlrLayershell.namespace: "omarchy-dynamic-menu"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
+
+    onWidthChanged: {
+      if (!root.menu || width <= 0 || width === root.menu.mw) return
+      Engine.resize(root.menu, width)
+      root.revision++
+    }
 
     Item {
       id: keyCatcher
@@ -130,102 +246,61 @@ Item {
 
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          root.finish(null)
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          // The selected item, or the typed text when nothing matches or
-          // Shift is held, as in dmenu.
-          var shift = (event.modifiers & Qt.ShiftModifier) !== 0
-          root.finish(root.matches.length > 0 && !shift ? root.matches[root.selectedIndex] : root.filterText)
-        } else if (event.key === Qt.Key_Left) {
-          root.move(-1)
-        } else if (event.key === Qt.Key_Right) {
-          root.move(1)
-        } else if (Util.editsFilter(event, root.filterText)) {
-          root.setFilter(Util.editedFilter(event, root.filterText))
-        } else if (event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
-          root.setFilter(root.filterText + event.text)
-        } else {
-          return
-        }
         event.accepted = true
+        if (!root.menu || !root.opened) return
+        var result = Engine.keypress(root.menu, {
+          key: root.keyName(event),
+          text: event.text,
+          ctrl: (event.modifiers & Qt.ControlModifier) !== 0,
+          shift: (event.modifiers & Qt.ShiftModifier) !== 0,
+          alt: (event.modifiers & Qt.AltModifier) !== 0
+        })
+        if (result.output !== null) root.printLine(result.output)
+        if (result.paste && !pasteProc.running) {
+          pasteProc.command = result.paste === "primary" ? ["wl-paste", "--primary", "--no-newline"] : ["wl-paste", "--no-newline"]
+          pasteProc.running = true
+        }
+        root.revision++
+        if (result.exit !== null) root.finish(result.exit)
       }
     }
 
-    Row {
-      anchors.fill: parent
+    Repeater {
+      model: root.view ? root.view.boxes : []
 
-      Rectangle {
-        visible: root.prompt.length > 0
-        width: promptText.implicitWidth + root.itemPadding * 2
-        height: parent.height
-        color: root.selectedBackground
+      delegate: Rectangle {
+        id: box
+        required property var modelData
+        readonly property var colors: root.colorsFor(modelData.scheme)
 
+        x: modelData.x
+        y: modelData.y * root.bh
+        width: modelData.width
+        height: root.bh
+        color: colors[1]
+
+        // drw_text(): left padding of lrpad / 2, cut off with an ellipsis.
         Text {
-          id: promptText
-          anchors.centerIn: parent
-          textFormat: Text.PlainText
-          text: root.prompt
-          color: root.selectedText
-          font.family: root.fontFamily
-          font.pixelSize: root.fontSize
-        }
-      }
-
-      // Stock dmenu gives the input a third of the bar, at least.
-      Item {
-        width: Math.max(panel.width / 3, inputText.implicitWidth + root.itemPadding * 2)
-        height: parent.height
-
-        Text {
-          id: inputText
-          anchors.left: parent.left
-          anchors.leftMargin: root.itemPadding
+          x: root.lrpad / 2
+          width: Math.max(0, box.width - root.lrpad / 2)
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
-          text: root.filterText
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: root.fontSize
-        }
-
-        Rectangle {
-          anchors.left: inputText.right
-          anchors.verticalCenter: parent.verticalCenter
-          width: 2
-          height: root.fontSize
-          color: root.foreground
+          text: box.modelData.text
+          color: box.colors[0]
+          font: root.menuFont
+          elide: Text.ElideRight
         }
       }
+    }
 
-      ListView {
-        id: itemRow
-        width: parent.width - x
-        height: parent.height
-        orientation: ListView.Horizontal
-        clip: true
-        interactive: false
-        model: root.matches
-
-        delegate: Rectangle {
-          required property int index
-          required property string modelData
-
-          width: label.implicitWidth + root.itemPadding * 2
-          height: itemRow.height
-          color: index === root.selectedIndex ? root.selectedBackground : "transparent"
-
-          Text {
-            id: label
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: parent.modelData
-            color: index === root.selectedIndex ? root.selectedText : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: root.fontSize
-          }
-        }
-      }
+    // dmenu's cursor: 2px wide, bh - 4 tall, 2px from the top.
+    Rectangle {
+      visible: root.view !== null && root.view.cursor.visible
+      x: root.view ? root.view.cursor.x : 0
+      y: 2
+      width: 2
+      height: root.bh - 4
+      color: root.normFg
     }
   }
 }

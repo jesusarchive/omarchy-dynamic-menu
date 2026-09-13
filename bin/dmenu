@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # dmenu for the Omarchy shell: reads items from stdin, prints the pick.
-# Takes suckless dmenu's flags. Fonts, colors and window embedding are accepted
-# and ignored: the Omarchy theme styles the menu.
+# Takes suckless dmenu's flags. Without -fn/-nb/-nf/-sb/-sf the Omarchy theme
+# styles the menu. -f and -w (X11 window embedding) are accepted and ignored.
 
 set -euo pipefail
 
@@ -22,6 +22,11 @@ atoi() {
 }
 
 prompt=""
+font=""
+norm_bg=""
+norm_fg=""
+sel_bg=""
+sel_fg=""
 lines=0
 monitor=-1
 bottom=false
@@ -45,7 +50,12 @@ while (( $# > 0 )); do
         -l) lines=$(atoi "$2") ;;
         -m) monitor=$(atoi "$2") ;;
         -p) prompt="$2" ;;
-        -fn | -nb | -nf | -sb | -sf | -w) ;;
+        -fn) font="$2" ;;
+        -nb) norm_bg="$2" ;;
+        -nf) norm_fg="$2" ;;
+        -sb) sel_bg="$2" ;;
+        -sf) sel_fg="$2" ;;
+        -w) ;;
         *) usage ;;
       esac
       shift
@@ -57,28 +67,50 @@ done
 selection_file=$(mktemp)
 done_file=$(mktemp)
 rm -f "$done_file"
-trap 'rm -f "$selection_file" "$done_file"' EXIT
+trap 'rm -f "$selection_file" "$done_file" "$done_file.tmp"' EXIT
 
 payload=$(jq -Rn \
   --arg prompt "$prompt" \
+  --arg font "$font" \
+  --arg normBg "$norm_bg" \
+  --arg normFg "$norm_fg" \
+  --arg selBg "$sel_bg" \
+  --arg selFg "$sel_fg" \
   --argjson lines "$lines" \
   --argjson monitor "$monitor" \
   --argjson bottom "$bottom" \
   --argjson caseInsensitive "$case_insensitive" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
-  '{ prompt: $prompt, lines: $lines, monitor: $monitor, bottom: $bottom,
-     caseInsensitive: $caseInsensitive, items: [inputs],
+  '{ prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
+     selBg: $selBg, selFg: $selFg, lines: $lines, monitor: $monitor,
+     bottom: $bottom, caseInsensitive: $caseInsensitive, items: [inputs],
      selectionFile: $selectionFile, doneFile: $doneFile }')
 
-omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null
-
-while [[ ! -e $done_file ]]; do
-  sleep 0.05
-done
-
-if [[ -s $selection_file ]]; then
-  cat "$selection_file"
-else
+if ! omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null; then
+  echo "dmenu: could not reach the Omarchy shell" >&2
   exit 1
 fi
+
+# The menu appends every printed line to the selection file (Ctrl+Return
+# prints and stays open), then writes the exit status to the done file.
+# Pass lines on as they come, like dmenu writing to stdout.
+printed=0
+flush() {
+  local size
+  size=$(stat -c %s "$selection_file")
+  if (( size > printed )); then
+    tail -c +$(( printed + 1 )) "$selection_file" | head -c $(( size - printed ))
+    printed=$size
+  fi
+}
+
+while [[ ! -e $done_file ]]; do
+  flush
+  sleep 0.05
+done
+flush
+
+status=$(<"$done_file")
+[[ $status == 0 ]] && exit 0
+exit 1
