@@ -7,6 +7,16 @@
 
 var WORD_DELIMITERS = " "
 
+// readstdin(): one item per line, with the newline stripped. A final line
+// without a newline is still an item; empty lines are items too.
+function readstdin(text) {
+  var s = String(text || "")
+  if (s === "") return []
+  var lines = s.split("\n")
+  if (s.charAt(s.length - 1) === "\n") lines.pop()
+  return lines
+}
+
 function create(items, options) {
   var opts = options || {}
   var state = {
@@ -379,6 +389,7 @@ function resize(state, mw) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    readstdin: readstdin,
     create: create,
     keypress: keypress,
     paste: paste,

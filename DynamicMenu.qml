@@ -116,13 +116,36 @@ Item {
     var screen = root.targetScreen()
     if (screen) root.menuScreen = screen
 
-    root.menu = Engine.create(Array.isArray(payload.items) ? payload.items : [], {
+    // bin/dmenu leaves stdin in a temp file. The menu shows once that file has
+    // loaded, like dmenu reading all of stdin before it maps its window.
+    root.pendingPayload = payload
+    root.pendingItemsFile = String(payload.itemsFile || "")
+    if (!root.pendingItemsFile) {
+      root.show("")
+    } else if (itemsView.path === root.pendingItemsFile) {
+      itemsView.reload()
+    } else {
+      itemsView.path = root.pendingItemsFile
+    }
+  }
+
+  // The request waiting for its items file, until show() takes it.
+  property var pendingPayload: null
+  property string pendingItemsFile: ""
+
+  function show(itemsText) {
+    var payload = root.pendingPayload
+    root.pendingPayload = null
+    root.pendingItemsFile = ""
+    if (!payload || !root.doneFile) return
+
+    root.menu = Engine.create(Engine.readstdin(itemsText), {
       lines: Number.isInteger(payload.lines) ? payload.lines : 0,
       caseInsensitive: payload.caseInsensitive === true,
       prompt: String(payload.prompt || ""),
       textw: root.textw,
       lrpad: root.lrpad,
-      mw: screen ? screen.width : panel.width,
+      mw: root.menuScreen ? root.menuScreen.width : panel.width,
       match: Match.match
     })
     root.revision++
@@ -174,12 +197,22 @@ Item {
   function finish(status) {
     var doneFile = root.doneFile
     root.opened = false
+    root.pendingPayload = null
+    root.pendingItemsFile = ""
     if (!doneFile) return
     root.doneFile = ""
     root.writeExit(doneFile, status)
     root.selectionFile = ""
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
+  }
+
+  FileView {
+    id: itemsView
+    printErrors: false
+    // A path whose request was cancelled or replaced is ignored.
+    onLoaded: if (path === root.pendingItemsFile) root.show(text())
+    onLoadFailed: if (path === root.pendingItemsFile) root.show("")
   }
 
   Process {

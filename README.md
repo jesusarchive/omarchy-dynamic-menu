@@ -137,9 +137,11 @@ way they override `config.def.h` in dmenu.
 
 ## How it works
 
-- **`bin/dmenu`:** parses the flags the way `main()` in `dmenu.c` does. It reads
-  stdin and sends the items to the plugin with
-  `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`.
+- **`bin/dmenu`:** parses the flags the way `main()` in `dmenu.c` does. It
+  streams stdin into a temporary file and summons the plugin with
+  `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`, passing only
+  the file's path. Like dmenu reading its own stdin, there's no limit on how much
+  you pipe in.
 - **Results:** the menu appends each printed line to a temporary file and writes
   the exit status to a second one when it closes. `bin/dmenu` passes the lines
   on as they arrive, so Ctrl+Return picks reach the caller straight away, the

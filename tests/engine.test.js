@@ -237,3 +237,12 @@ test("surrogate pairs are stepped over as one character", () => {
   key(s, "BackSpace")
   assert.strictEqual(s.text, "a")
 })
+
+test("readstdin splits lines like dmenu", () => {
+  assert.deepStrictEqual(Engine.readstdin(""), [])
+  assert.deepStrictEqual(Engine.readstdin("a\nb\n"), ["a", "b"])
+  assert.deepStrictEqual(Engine.readstdin("a\nb"), ["a", "b"])
+  assert.deepStrictEqual(Engine.readstdin("a\n\nb\n"), ["a", "", "b"])
+  assert.deepStrictEqual(Engine.readstdin("\n"), [""])
+  assert.deepStrictEqual(Engine.readstdin("a\r\n"), ["a\r"])
+})

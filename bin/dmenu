@@ -66,17 +66,22 @@ while (( $# > 0 )); do
   shift
 done
 
+items_file=$(mktemp)
 selection_file=$(mktemp)
 done_file=$(mktemp)
 rm -f "$done_file"
-trap 'rm -f "$selection_file" "$done_file" "$done_file.tmp"' EXIT
+trap 'rm -f "$items_file" "$selection_file" "$done_file" "$done_file.tmp"' EXIT
+
+# Items go to the plugin as a file, like dmenu reading stdin itself. Putting
+# them in the IPC argument would hit Linux's 128 KB limit on one argument.
+cat > "$items_file"
 
 shell_json="$HOME/.config/omarchy/shell.json"
 style=$(jq -r '[.plugins[]? | objects | select(.id == "jesusarchive.dynamic-menu") | .style][0] // "omarchy"' \
   "$shell_json" 2>/dev/null || echo omarchy)
 bar_position=$(jq -r '.bar.position // "top"' "$shell_json" 2>/dev/null || echo top)
 
-payload=$(jq -Rn \
+payload=$(jq -n \
   --arg style "$style" \
   --arg barPosition "$bar_position" \
   --arg prompt "$prompt" \
@@ -89,11 +94,12 @@ payload=$(jq -Rn \
   --argjson monitor "$monitor" \
   --argjson bottom "$bottom" \
   --argjson caseInsensitive "$case_insensitive" \
+  --arg itemsFile "$items_file" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
   '{ style: $style, barPosition: $barPosition, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
      selBg: $selBg, selFg: $selFg, lines: $lines, monitor: $monitor,
-     bottom: $bottom, caseInsensitive: $caseInsensitive, items: [inputs],
+     bottom: $bottom, caseInsensitive: $caseInsensitive, itemsFile: $itemsFile,
      selectionFile: $selectionFile, doneFile: $doneFile }')
 
 # omarchy-shell gives up after 2 s by default. The first summon after the
