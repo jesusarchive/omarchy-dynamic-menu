@@ -17,8 +17,8 @@ printf 'yes\nno\n' | dmenu -p 'Reboot?'
   `<` `>` page markers, `-l` vertical lists, and Ctrl+Return to pick several
   items.
 - **Same flags**, so existing dmenu scripts work unchanged.
-- **Comes with `dmenu_run` and `dmenu_path`.** Press **Super+D** to pick a
-  program from your `$PATH` and run it.
+- **Comes with `dmenu_run` and `dmenu_path`.** Bind `dmenu_run` to a key to
+  pick a program from your `$PATH` and run it.
 - **Themed.** It uses the Omarchy menu colors and font, and its rows are as tall
   as the Omarchy bar, so the menu sits exactly over it. `"style": "dmenu"`
   switches to dmenu's own colors.
@@ -29,13 +29,25 @@ printf 'yes\nno\n' | dmenu -p 'Reboot?'
 omarchy plugin add https://github.com/jesusarchive/omarchy-dynamic-menu.git --enable
 ```
 
-Super+D works as soon as the plugin loads. For scripts that call `dmenu` by
-name, put the commands on your `$PATH`:
+Put the commands on your `$PATH`, so keybindings and scripts can call `dmenu`
+by name:
 
 ```bash
 plugin=~/.config/omarchy/plugins/jesusarchive.dynamic-menu
 ln -s "$plugin/bin/dmenu" "$plugin/bin/dmenu_run" "$plugin/bin/dmenu_path" ~/.local/bin/
 ```
+
+### Keybinding
+
+The plugin doesn't bind any keys. To launch programs with `dmenu_run`, add a
+binding to `~/.config/hypr/bindings.lua`, picking any free chord:
+
+```lua
+o.bind("SUPER + D", "Dynamic menu", "dmenu_run")
+```
+
+If the chord is already taken, unbind it first with `hl.unbind("SUPER + D")`.
+Hyprland reloads the file on save; `hyprctl configerrors` shows any mistakes.
 
 Manual install from a checkout:
 
@@ -49,8 +61,8 @@ omarchy plugin enable jesusarchive.dynamic-menu
 Requirements: `bash`, `jq` and `wl-paste` (wl-clipboard). All three ship with
 Omarchy.
 
-To remove it, run `omarchy plugin disable jesusarchive.dynamic-menu`, which also
-removes the Super+D binding, and delete the `~/.local/bin` links if you made them.
+To remove it, run `omarchy plugin disable jesusarchive.dynamic-menu`, then delete
+the `~/.local/bin` links and your keybinding.
 
 ## Use
 
@@ -81,8 +93,8 @@ closed with Escape.
 Items equal to the whole input come first, then items starting with the first
 word, then the rest, each group in stdin order.
 
-**Super+D** runs `dmenu_run`. If you've already bound Super+D yourself, the
-plugin leaves your binding alone.
+`dmenu_run` lists the programs on your `$PATH` and runs the one you pick in
+`$SHELL`. See [Keybinding](#keybinding) to put it on a key.
 
 ### Keys
 
@@ -153,9 +165,6 @@ way they override `config.def.h` in dmenu.
 - **`bin/dmenu_path`:** lists the executables on `$PATH`, cached in
   `~/.cache/dmenu_run`, using the same rules as dmenu's `stest -flx`.
   `bin/dmenu_run` pipes that list into `dmenu` and runs the pick in `$SHELL`.
-- **Super+D:** `Service.qml` binds it at runtime with `hyprctl eval`, binds it
-  again after a Hyprland config reload, and removes it when the plugin is
-  disabled. Nothing is written to `~/.config/hypr`.
 
 **Differences from dmenu:**
 - Long items are cut off with `…`, not `...`.
@@ -177,7 +186,6 @@ printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 - `manifest.json`
 - `DynamicMenu.qml`: the bar
 - `Engine.js`, `Match.js`: dmenu's logic
-- `Service.qml`, `bin/keybind`: Super+D
 - `bin/dmenu`, `bin/dmenu_run`, `bin/dmenu_path`
 - `tests/`
 

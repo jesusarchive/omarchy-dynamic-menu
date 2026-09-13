@@ -6,10 +6,9 @@
   "author": "jesusarchive",
   "license": "MIT",
   "description": "suckless dmenu for the Omarchy shell.",
-  "kinds": ["overlay", "service"],
+  "kinds": ["overlay"],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "DynamicMenu.qml",
-    "service": "Service.qml"
+    "overlay": "DynamicMenu.qml"
   }
 }
