@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# dmenu for the Omarchy shell: reads items from stdin, prints the pick.
+# Exits 1 when cancelled or when there is nothing to pick from.
+
+set -euo pipefail
+
+prompt=""
+
+while (( $# > 0 )); do
+  case "$1" in
+    -p)
+      shift
+      prompt="${1-}"
+      ;;
+    *)
+      echo "usage: dmenu [-p prompt]" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+selection_file=$(mktemp)
+done_file=$(mktemp)
+rm -f "$done_file"
+trap 'rm -f "$selection_file" "$done_file"' EXIT
+
+payload=$(jq -Rn \
+  --arg prompt "$prompt" \
+  --arg selectionFile "$selection_file" \
+  --arg doneFile "$done_file" \
+  '{ prompt: $prompt, items: [inputs], selectionFile: $selectionFile, doneFile: $doneFile }')
+
+omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null
+
+while [[ ! -e $done_file ]]; do
+  sleep 0.05
+done
+
+if [[ -s $selection_file ]]; then
+  cat "$selection_file"
+else
+  exit 1
+fi

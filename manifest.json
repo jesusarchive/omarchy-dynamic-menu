@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "jesusarchive.dynamic-menu",
+  "name": "Dynamic Menu",
+  "version": "0.1.0",
+  "author": "jesusarchive",
+  "license": "MIT",
+  "description": "Stock dmenu for the Omarchy shell: a one-line bar that reads items from stdin and prints the pick.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "DynamicMenu.qml"
+  }
+}
