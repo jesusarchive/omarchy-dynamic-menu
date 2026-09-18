@@ -224,6 +224,15 @@ test("layout: the input takes the full width when nothing matches", () => {
   assert.strictEqual(input.width, 900 - 38)
 })
 
+test("cursor position uses the full input width minus the suffix", () => {
+  const widths = { "": 10, A: 30, V: 20, AV: 35 }
+  const s = menu([], { textw: (text) => widths[text], lrpad: 10 })
+  s.text = "AV"
+  s.cursor = 1
+
+  assert.strictEqual(Engine.layout(s).cursor.x, 19)
+})
+
 test("long items are clamped to the space left", () => {
   const s = menu(["x".repeat(200)], { mw: 400 })
   const it = Engine.layout(s).boxes.find((b) => b.kind === "item")

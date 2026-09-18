@@ -349,7 +349,9 @@ function layout(state) {
   var w = state.lines > 0 || count === 0 ? mw - x : inputw(state)
   boxes.push({ kind: "input", text: state.text, x: x, y: 0, width: w, scheme: "norm" })
 
-  var curpos = state.textw(state.text.slice(0, state.cursor)) - state.lrpad + Math.floor(state.lrpad / 2) - 1
+  // dmenu measures the whole input and subtracts the suffix. This preserves
+  // the cursor position produced by the font shaper around the split.
+  var curpos = state.textw(state.text) - state.textw(state.text.slice(state.cursor)) + Math.floor(state.lrpad / 2) - 1
   var cursor = { x: x + curpos, visible: curpos < w }
 
   if (state.lines > 0) {

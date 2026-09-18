@@ -103,7 +103,7 @@ dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]
 | `-l lines` | Show items in a vertical list with this many lines |
 | `-m monitor` | Show the menu on this monitor, counting from 0. By default it opens on the focused monitor |
 | `-p prompt` | Prompt shown to the left of the input |
-| `-fn font` | Font, as a fontconfig pattern such as `monospace:size=10` |
+| `-fn font` | Font family with an optional `size` or `pixelsize`, such as `monospace:size=10` |
 | `-nb` `-nf` | Normal background and foreground color |
 | `-sb` `-sf` | Selected background and foreground color |
 | `-v` | Print the version and exit |

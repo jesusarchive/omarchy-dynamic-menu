@@ -63,7 +63,8 @@ Item {
     font: root.menuFont
   }
 
-  // A fontconfig pattern like dmenu's "monospace:size=10", or "Family-10".
+  // A font family with an optional size, such as "monospace:size=10",
+  // "monospace:pixelsize=14", or "Family-10".
   // Without -fn, the menu uses the theme's font.
   function parseFont(spec) {
     var family = Style.font.menuFamily
