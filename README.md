@@ -114,6 +114,33 @@ without printing anything.
 
 ![A vertical list with -l 5 -p System](assets/screenshot-list.png)
 
+### Examples
+
+Pick from a short list:
+
+```bash
+printf 'Lock\nLog out\nSuspend\n' | dmenu -p 'Session:'
+```
+
+Search a longer list in vertical mode:
+
+```bash
+printf 'Firefox\nChromium\nQutebrowser\n' | dmenu -i -l 5 -p 'Browser:'
+```
+
+Capture the selection in a script:
+
+```bash
+choice=$(printf 'Light\nDark\n' | dmenu -p 'Theme:') || exit 1
+printf 'Selected: %s\n' "$choice"
+```
+
+Open the program launcher with matching enabled:
+
+```bash
+dmenu_run -i -p 'Run:'
+```
+
 ### Matching
 
 Each space-separated word you type has to appear in the item. Items equal to
@@ -214,10 +241,8 @@ focus while the menu is open.
 
 ### Differences from dmenu
 
-- Long items are cut off with `…`, not `...`.
-- `-m` counts monitors in the order Quickshell lists them.
-- A second `dmenu` started while one is open replaces it. In dmenu, the second
-  one fails to grab the keyboard.
+- `-m` counts monitors in Quickshell's display order.
+- Starting another menu replaces the one already open.
 
 ## Files and permissions
 
