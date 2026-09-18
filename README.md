@@ -1,10 +1,10 @@
 # Dynamic Menu for Omarchy
 
-[suckless dmenu](https://tools.suckless.org/dmenu/), rebuilt as an
+Dynamic Menu rebuilds [suckless dmenu](https://tools.suckless.org/dmenu/) as an
 [Omarchy](https://omarchy.org) shell plugin. It draws a one-line bar across the
-top of the screen. Lines piped in on stdin become the items, and your pick is
-printed to stdout. It runs inside `omarchy-shell` and follows your Omarchy theme.
-Plugin ID: `jesusarchive.dynamic-menu`. MIT licensed.
+top of the screen, reads its items from stdin and prints the selected item to
+stdout. It runs inside `omarchy-shell` and follows the current Omarchy theme.
+Its plugin ID is `jesusarchive.dynamic-menu`, and its license is MIT.
 
 ![dmenu_run over the Omarchy bar](assets/screenshot.png)
 
@@ -12,16 +12,15 @@ Plugin ID: `jesusarchive.dynamic-menu`. MIT licensed.
 printf 'yes\nno\n' | dmenu -p 'Reboot?'
 ```
 
-- **Same behaviour as dmenu 5.4.** The input handling, matching, paging and
-  layout are ported from `dmenu.c`. That covers every key from the dmenu man
-  page, the `<` `>` page markers, `-l` vertical lists, and Ctrl+Return to pick
-  several items.
+- **dmenu 5.4 behavior.** This plugin ports the input handling, matching,
+  paging and layout from `dmenu.c`. It supports every key from the dmenu man
+  page, the `<` `>` page markers, `-l` vertical lists and Ctrl+Return for
+  selecting several items.
 - **Same flags.** Existing dmenu scripts work unchanged.
-- **Comes with `dmenu_run` and `dmenu_path`.** Bind `dmenu_run` to a key to
+- **Includes `dmenu_run` and `dmenu_path`.** Bind `dmenu_run` to a key to
   pick a program from your `$PATH` and run it.
-- **Themed.** It uses the Omarchy menu colors and font and follows
-  `omarchy theme set`. Its rows are as tall as the Omarchy bar, so the menu sits
-  exactly over it. Pass flags to get dmenu's own colors instead.
+- **Omarchy colors and font.** The menu follows `omarchy theme set`. Its rows
+  match the Omarchy bar height. Pass flags to use dmenu's colors instead.
 
 ## Install
 
@@ -51,9 +50,7 @@ omarchy plugin update jesusarchive.dynamic-menu
 
 ### Keybinding
 
-Omarchy plugins don't bind keys themselves, so add the binding to
-`~/.config/hypr/bindings.lua`. The suggested key is Super+D, which is free in a
-stock Omarchy setup:
+Add a keybinding to `~/.config/hypr/bindings.lua`:
 
 ```lua
 o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
@@ -62,43 +59,23 @@ o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dyna
 Hyprland reloads the file on save, and the binding shows up in Omarchy's
 keybindings list (Super+K) as "Dynamic menu".
 
-#### Changing the key
-
-1. Pick a free chord. List what's already bound with Super+K, or:
-
-   ```bash
-   omarchy menu keybindings --print
-   ```
-
-2. Change the first argument of the `o.bind` line, for example to
-   `"SUPER + ALT + D"`. Modifiers are `SUPER`, `SHIFT`, `CTRL` and `ALT`, joined
-   with ` + `.
-3. To use a chord that Omarchy or another plugin already binds, unbind it first,
-   on the line before yours:
-
-   ```lua
-   hl.unbind("SUPER + SPACE")
-   o.bind("SUPER + SPACE", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
-   ```
-
-4. Save, then check for mistakes with `hyprctl configerrors`.
+Change `SUPER + D` to any free key combination.
 
 The command can take dmenu flags too, for example
 `".../bin/dmenu_run -i -p run"` for case-insensitive matching with a prompt.
 
 ### Scripts that call `dmenu` by name
 
-Tools and scripts written for dmenu run `dmenu` from your `$PATH`. The plugin
-lives in `~/.config/omarchy/plugins/`, which isn't on it, so link the commands
-into `~/.local/bin` once:
+Scripts that invoke `dmenu` by name look it up on `$PATH`. The plugin directory
+is not on `$PATH`, so link the commands into `~/.local/bin` once:
 
 ```bash
 ~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/link-commands
 ```
 
-It links `dmenu`, `dmenu_run` and `dmenu_path`, and leaves alone any existing
-file of the same name that isn't one of its links. Skip this if you only use the
-keybinding.
+The helper creates links for `dmenu`, `dmenu_run` and `dmenu_path`. It does not
+replace an existing file unless that file is one of its own links. Skip this if
+you only use the keybinding.
 
 ### Remove
 
@@ -109,8 +86,8 @@ omarchy plugin remove jesusarchive.dynamic-menu
 
 Then delete your keybinding from `bindings.lua`.
 
-Removal leaves the command cache at `~/.cache/dmenu_run`. It is safe to leave
-in place or delete manually.
+Removal leaves `~/.cache/dmenu_run`, which contains only cached executable
+names. Delete it manually if you do not want to keep the cache.
 
 ## Use
 
@@ -130,10 +107,10 @@ dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]
 | `-nb` `-nf` | Normal background and foreground color |
 | `-sb` `-sf` | Selected background and foreground color |
 | `-v` | Print the version and exit |
-| `-f`, `-w windowid` | Accepted for compatibility. They are X11 features and do nothing here |
+| `-f`, `-w windowid` | Compatibility only. These X11 flags have no effect |
 
-Exit status is 0 when something was printed with Return, and 1 when the menu was
-closed with Escape.
+Return prints a selection and exits with status 0. Escape exits with status 1
+without printing anything.
 
 ![A vertical list with -l 5 -p System](assets/screenshot-list.png)
 
@@ -152,7 +129,7 @@ rest, each group in stdin order.
 |---|---|
 | `Return` | Print the selected item and exit. With no match, print the typed text |
 | `Shift+Return` | Print the typed text and exit |
-| `Ctrl+Return` | Print the selected item and keep the menu open. The item is marked |
+| `Ctrl+Return` | Print and mark the selected item, then keep the menu open |
 | `Escape` | Exit without printing |
 | `Tab` | Copy the selected item into the input |
 | `Left` / `Right` | Move the text cursor, or the selection once the cursor is at the edge of the text |
@@ -181,8 +158,7 @@ Emacs-style keys, as in dmenu:
 ## Colors
 
 Colors and font come from the current Omarchy theme and follow
-`omarchy theme set`. Items picked with Ctrl+Return use the theme accent. There
-is nothing to configure.
+`omarchy theme set`. Items picked with Ctrl+Return use the theme accent.
 
 `-fn`, `-nb`, `-nf`, `-sb` and `-sf` override the theme, the same way they
 override `config.def.h` in dmenu.
@@ -201,40 +177,39 @@ That is exactly what dwm passes, so a dwm keybinding works here unchanged:
 dmenu_run -m 0 -fn monospace:size=10 -nb '#222222' -nf '#bbbbbb' -sb '#005577' -sf '#eeeeee'
 ```
 
-For a permanent stock-looking launcher, put those flags in your keybinding:
+To use these colors on every launch, put the flags in your keybinding:
 
 ```lua
 o.bind("SUPER + D", "Dynamic menu",
   "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run -fn monospace:size=10 -nb '#222222' -nf '#bbbbbb' -sb '#005577' -sf '#eeeeee'")
 ```
 
-Colors set this way are fixed, so changing theme leaves them alone. Leave them
-out to follow the theme instead.
+Theme changes do not affect colors set with flags. Omit the flags to follow the
+theme.
 
 Rows are always as tall as the Omarchy bar when the bar is horizontal. dmenu
-uses font height plus 2px because that was dwm's bar height. Omarchy's bar has
+uses font height plus 2 px because that was dwm's bar height. Omarchy's bar has
 its own height, so the menu matches that instead.
 
 ## How it works
 
 `bin/dmenu` parses the flags the way `main()` in `dmenu.c` does. It streams
 stdin into a temporary file and summons the plugin with
-`omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`, passing only
-the file's path. Like dmenu reading its own stdin, there is no limit on how much
-you pipe in.
+`omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`. The IPC
+payload contains the file path instead of the input, so Linux's per-argument
+size limit does not restrict stdin.
 
 The menu appends each printed line to a temporary file and writes the exit
-status to a second one when it closes. `bin/dmenu` passes the lines on as they
-arrive, so Ctrl+Return picks reach the caller straight away, the same as dmenu
-writing to stdout.
+status to a second one when it closes. `bin/dmenu` forwards each line as soon as
+the plugin writes it, matching dmenu's Ctrl+Return behavior.
 
-`Engine.js` holds dmenu's `keypress()`, `calcoffsets()` and `drawmenu()`, ported
-function by function and kept free of Qt so node can test it. `Match.js` is
-dmenu's `match()`. `DynamicMenu.qml` draws the result on a layer-shell surface
-that takes the keyboard while it is open.
+`Engine.js` implements dmenu's `keypress()`, `calcoffsets()` and `drawmenu()`
+without Qt dependencies. `Match.js` implements dmenu's `match()`.
+`DynamicMenu.qml` draws the result on a layer-shell window and takes keyboard
+focus while the menu is open.
 
-`bin/dmenu_path` lists the executables on `$PATH`, cached in
-`~/.cache/dmenu_run`, using the same rules as dmenu's `stest -flx`.
+`bin/dmenu_path` lists the executables on `$PATH` and stores the result in
+`~/.cache/dmenu_run`. It uses the same rules as dmenu's `stest -flx`.
 `bin/dmenu_run` pipes that list into `dmenu` and runs the pick in `$SHELL`.
 
 ### Differences from dmenu
@@ -270,15 +245,17 @@ printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 
 ### Files
 
-- `manifest.json`
-- `DynamicMenu.qml`: the bar
-- `Engine.js`, `Match.js`: dmenu's logic
-- `bin/dmenu`, `bin/dmenu_run`, `bin/dmenu_path`
-- `bin/link-commands`: optional links into `~/.local/bin`
-- `tests/`
+| Path | Purpose |
+|---|---|
+| `manifest.json` | Plugin metadata and entry point |
+| `DynamicMenu.qml` | Menu window and rendering |
+| `Engine.js`, `Match.js` | Input, layout and matching |
+| `bin/dmenu`, `bin/dmenu_run`, `bin/dmenu_path` | dmenu-compatible commands |
+| `bin/link-commands` | Optional links under `~/.local/bin` |
+| `tests/` | Engine and matching tests |
 
 ## License
 
-MIT. The input handling, matching and scripts are ported from dmenu 5.4, whose
-MIT/X Consortium license and copyright notices are included in
-`THIRD_PARTY_NOTICES.md`.
+MIT. This project ports input handling, matching and scripts from dmenu 5.4.
+`THIRD_PARTY_NOTICES.md` contains dmenu's MIT/X Consortium license and
+copyright notices.
