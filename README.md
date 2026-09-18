@@ -261,7 +261,7 @@ to this plugin.
 ## Development
 
 ```bash
-node --test tests/                        # engine and matching tests
+node --test tests/*.test.js                # engine and matching tests
 omarchy plugin validate .                 # manifest check
 rsync -a --delete --exclude .git ./ ~/.config/omarchy/plugins/jesusarchive.dynamic-menu/
 omarchy restart shell                     # QML changes need a restart to show up

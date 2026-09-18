@@ -20,7 +20,7 @@ jobs:
           node-version: 24
 
       - name: Run tests
-        run: node --test tests/
+        run: node --test tests/*.test.js
 
       - name: Check shell syntax
         run: bash -n bin/dmenu bin/dmenu_path bin/dmenu_run bin/link-commands
