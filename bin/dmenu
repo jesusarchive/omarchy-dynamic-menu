@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # dmenu for the Omarchy shell: reads items from stdin, prints the pick.
-# Takes suckless dmenu's flags. Colors and font follow the Omarchy theme, or
-# dmenu's own defaults with "style": "dmenu" on the plugin's entry in
-# ~/.config/omarchy/shell.json. -fn/-nb/-nf/-sb/-sf override either.
+# Takes suckless dmenu's flags. Colors and font follow the live Omarchy theme,
+# so they track `omarchy theme set`; -fn/-nb/-nf/-sb/-sf override them.
 # -f and -w (X11 window embedding) are accepted and ignored.
 
 set -euo pipefail
+
+plugin_id=jesusarchive.dynamic-menu
 
 usage() {
   echo "usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]" >&2
@@ -70,19 +71,26 @@ items_file=$(mktemp)
 selection_file=$(mktemp)
 done_file=$(mktemp)
 rm -f "$done_file"
-trap 'rm -f "$items_file" "$selection_file" "$done_file" "$done_file.tmp"' EXIT
+
+# The menu surface takes the keyboard exclusively, so a caller killed while it
+# is open would leave it on screen with the grab held. The done file exists
+# only once the menu has closed itself, so its absence means we still owe a
+# hide.
+cleanup() {
+  [[ -e $done_file ]] || omarchy-shell shell hide "$plugin_id" >/dev/null 2>&1 || true
+  rm -f "$items_file" "$selection_file" "$done_file" "$done_file.tmp"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
 
 # Items go to the plugin as a file, like dmenu reading stdin itself. Putting
 # them in the IPC argument would hit Linux's 128 KB limit on one argument.
 cat > "$items_file"
 
 shell_json="$HOME/.config/omarchy/shell.json"
-style=$(jq -r '[.plugins[]? | objects | select(.id == "jesusarchive.dynamic-menu") | .style][0] // "omarchy"' \
-  "$shell_json" 2>/dev/null || echo omarchy)
 bar_position=$(jq -r '.bar.position // "top"' "$shell_json" 2>/dev/null || echo top)
 
 payload=$(jq -n \
-  --arg style "$style" \
   --arg barPosition "$bar_position" \
   --arg prompt "$prompt" \
   --arg font "$font" \
@@ -97,15 +105,20 @@ payload=$(jq -n \
   --arg itemsFile "$items_file" \
   --arg selectionFile "$selection_file" \
   --arg doneFile "$done_file" \
-  '{ style: $style, barPosition: $barPosition, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
+  '{ barPosition: $barPosition, prompt: $prompt, font: $font, normBg: $normBg, normFg: $normFg,
      selBg: $selBg, selFg: $selFg, lines: $lines, monitor: $monitor,
      bottom: $bottom, caseInsensitive: $caseInsensitive, itemsFile: $itemsFile,
      selectionFile: $selectionFile, doneFile: $doneFile }')
 
 # omarchy-shell gives up after 2 s by default. The first summon after the
 # plugin is (re)loaded can take longer than that.
-if ! OMARCHY_SHELL_IPC_TIMEOUT=10s omarchy-shell shell summon jesusarchive.dynamic-menu "$payload" >/dev/null; then
-  echo "dmenu: could not reach the Omarchy shell" >&2
+#
+# The IPC exits 0 whether or not it summoned anything. The answer is on
+# stdout, "ok" or "unknown". Checking the status alone never catches a
+# disabled or missing plugin, and the wait below would then never end.
+summoned=$(OMARCHY_SHELL_IPC_TIMEOUT=10s omarchy-shell shell summon "$plugin_id" "$payload" 2>/dev/null) || true
+if [[ $summoned != ok ]]; then
+  echo "dmenu: the Omarchy shell did not open the menu (${summoned:-no response})" >&2
   exit 1
 fi
 
@@ -122,9 +135,17 @@ flush() {
   fi
 }
 
+# `omarchy restart shell` drops the plugin without writing a done file, so
+# check every two seconds that the shell is still answering rather than
+# waiting for a file that will never arrive.
+ticks=0
 while [[ ! -e $done_file ]]; do
   flush
   sleep 0.05
+  if (( ++ticks % 40 == 0 )) && ! omarchy-shell shell ping >/dev/null 2>&1; then
+    echo "dmenu: the Omarchy shell went away" >&2
+    exit 1
+  fi
 done
 flush
 

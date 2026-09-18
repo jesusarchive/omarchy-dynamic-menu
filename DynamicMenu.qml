@@ -30,34 +30,32 @@ Item {
   property string selectionFile: ""
   property string doneFile: ""
 
-  // Defaults come from `style`: "omarchy" (default) is the current Omarchy
-  // theme, "dmenu" is config.def.h from dmenu 5.4. -fn, -nb, -nf, -sb and -sf
-  // override either, as they override config.def.h in dmenu.
-  property string style: "omarchy"
-  readonly property bool omarchyStyle: style === "omarchy"
+  // Colors and font follow the live Omarchy theme, so they track
+  // `omarchy theme set`. -fn, -nb, -nf, -sb and -sf override them, the same
+  // way they override config.def.h in dmenu.
   property string fontSpec: ""
   property string normBgSpec: ""
   property string normFgSpec: ""
   property string selBgSpec: ""
   property string selFgSpec: ""
 
-  property color normBg: normBgSpec || (omarchyStyle ? Color.menu.background : "#222222")
-  property color normFg: normFgSpec || (omarchyStyle ? Color.menu.text : "#bbbbbb")
-  property color selBg: selBgSpec || (omarchyStyle ? Color.menu.selectedBackground : "#005577")
-  property color selFg: selFgSpec || (omarchyStyle ? Color.menu.selectedText : "#eeeeee")
+  property color normBg: normBgSpec || Color.menu.background
+  property color normFg: normFgSpec || Color.menu.text
+  property color selBg: selBgSpec || Color.menu.selectedBackground
+  property color selFg: selFgSpec || Color.menu.selectedText
   // SchemeOut, for items printed with Ctrl+Return, has no flag.
-  property color outBg: omarchyStyle ? Color.accent : "#00ffff"
-  property color outFg: omarchyStyle ? Color.menu.background : "#000000"
+  property color outBg: Color.accent
+  property color outFg: Color.menu.background
 
   property font menuFont: root.parseFont(root.fontSpec)
   // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
   // That is also dwm's bar height, so dmenu sits exactly over dwm's bar. The
-  // Omarchy style does the same with the Omarchy bar: rows are as tall as a
-  // horizontal bar. A bar on the side has no height to match.
+  // number was only ever a way of matching the bar, so match the Omarchy bar
+  // instead of copying it. A bar on the side has no height to match.
   property string barPosition: "top"
   readonly property int fontHeight: Math.ceil(metrics.ascent) + Math.ceil(metrics.descent)
   readonly property int lrpad: fontHeight
-  readonly property bool matchBar: omarchyStyle && (barPosition === "top" || barPosition === "bottom")
+  readonly property bool matchBar: barPosition === "top" || barPosition === "bottom"
   readonly property int bh: matchBar ? Math.max(Style.bar.sizeHorizontal, fontHeight + 2) : fontHeight + 2
 
   FontMetrics {
@@ -66,9 +64,8 @@ Item {
   }
 
   // A fontconfig pattern like dmenu's "monospace:size=10", or "Family-10".
-  // Without -fn: the style's font.
+  // Without -fn, the menu uses the theme's font.
   function parseFont(spec) {
-    if (!spec && !root.omarchyStyle) spec = "monospace:size=10"
     var family = Style.font.menuFamily
     var pixelSize = Style.font.body
     var pointSize = 0
@@ -97,13 +94,12 @@ Item {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
 
-    // A new request while one is pending cancels the old caller, without
-    // hiding: that would come back through close() and cancel this one too.
+    // A new request while one is pending cancels the old caller, but does not
+    // hide. Hiding would come back through close() and cancel this one too.
     if (root.doneFile) root.writeExit(root.doneFile, 1)
 
     root.atBottom = payload.bottom === true
     root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
-    root.style = payload.style === "dmenu" ? "dmenu" : "omarchy"
     root.barPosition = String(payload.barPosition || "top")
     root.fontSpec = String(payload.font || "")
     root.normBgSpec = String(payload.normBg || "")
@@ -168,8 +164,8 @@ Item {
     return screens.length > 0 ? screens[0] : null
   }
 
-  // Results go to bin/dmenu through files: each printed line is appended to
-  // the selection file, and the exit status lands in the done file last.
+  // Results go to bin/dmenu through files. The menu appends each printed line
+  // to the selection file, then writes the exit status to the done file last.
   // Writes run one at a time so they arrive in order.
   property var writes: []
 
@@ -232,7 +228,7 @@ Item {
     }
   }
 
-  // Qt key event → the keysym names Engine.keypress() expects.
+  // Turns a Qt key event into the keysym names Engine.keypress() expects.
   function keyName(event) {
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
     if (event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {

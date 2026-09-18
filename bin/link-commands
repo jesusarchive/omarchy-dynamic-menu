@@ -4,7 +4,7 @@
 # scripts that call them by name, as symlinks in ~/.local/bin. Only needed for
 # those scripts; a keybinding can run bin/dmenu_run by its full path.
 #
-# Existing files that aren't links into this plugin are left alone.
+# It leaves alone any existing file that isn't one of its own links.
 
 set -euo pipefail
 

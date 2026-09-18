@@ -1,8 +1,8 @@
 # Dynamic Menu for Omarchy
 
 [suckless dmenu](https://tools.suckless.org/dmenu/), rebuilt as an
-[Omarchy](https://omarchy.org) shell plugin. You get a one-line bar across the
-top of the screen: lines piped in on stdin become the items, and your pick is
+[Omarchy](https://omarchy.org) shell plugin. It draws a one-line bar across the
+top of the screen. Lines piped in on stdin become the items, and your pick is
 printed to stdout. It runs inside `omarchy-shell` and follows your Omarchy theme.
 Plugin ID: `jesusarchive.dynamic-menu`. MIT licensed.
 
@@ -13,15 +13,15 @@ printf 'yes\nno\n' | dmenu -p 'Reboot?'
 ```
 
 - **Same behaviour as dmenu 5.4.** The input handling, matching, paging and
-  layout are ported from `dmenu.c`: every key from the dmenu man page, the
-  `<` `>` page markers, `-l` vertical lists, and Ctrl+Return to pick several
-  items.
-- **Same flags**, so existing dmenu scripts work unchanged.
+  layout are ported from `dmenu.c`. That covers every key from the dmenu man
+  page, the `<` `>` page markers, `-l` vertical lists, and Ctrl+Return to pick
+  several items.
+- **Same flags.** Existing dmenu scripts work unchanged.
 - **Comes with `dmenu_run` and `dmenu_path`.** Bind `dmenu_run` to a key to
   pick a program from your `$PATH` and run it.
-- **Themed.** It uses the Omarchy menu colors and font, and its rows are as tall
-  as the Omarchy bar, so the menu sits exactly over it. `"style": "dmenu"`
-  switches to dmenu's own colors.
+- **Themed.** It uses the Omarchy menu colors and font and follows
+  `omarchy theme set`. Its rows are as tall as the Omarchy bar, so the menu sits
+  exactly over it. Pass flags to get dmenu's own colors instead.
 
 ## Install
 
@@ -44,8 +44,8 @@ Omarchy.
 ### Keybinding
 
 Omarchy plugins don't bind keys themselves, so add the binding to
-`~/.config/hypr/bindings.lua`. The suggested key is **Super+D**, which is free
-in a stock Omarchy setup:
+`~/.config/hypr/bindings.lua`. The suggested key is Super+D, which is free in a
+stock Omarchy setup:
 
 ```lua
 o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
@@ -126,9 +126,11 @@ closed with Escape.
 
 ![A vertical list with -l 5 -p System](assets/screenshot-list.png)
 
-**Matching:** each space-separated word you type has to appear in the item.
-Items equal to the whole input come first, then items starting with the first
-word, then the rest, each group in stdin order.
+### Matching
+
+Each space-separated word you type has to appear in the item. Items equal to
+the whole input come first, then items starting with the first word, then the
+rest, each group in stdin order.
 
 `dmenu_run` lists the programs on your `$PATH` and runs the one you pick in
 `$SHELL`. See [Keybinding](#keybinding) to put it on a key.
@@ -165,45 +167,67 @@ Emacs-style keys, as in dmenu:
 | `Ctrl+J`, `Ctrl+M` | Return | `Ctrl+N` / `Ctrl+P` | Down / Up |
 | `Ctrl+Shift+J`, `Ctrl+Shift+M` | Shift+Return | `Ctrl+[` | Escape |
 
-## Settings
+## Colors
 
-Colors and font come from the `style` key on the plugin's entry in
-`~/.config/omarchy/shell.json`:
+Colors and font come from the current Omarchy theme and follow
+`omarchy theme set`. Items picked with Ctrl+Return use the theme accent. There
+is nothing to configure.
 
-```json
-"plugins": [
-  { "id": "jesusarchive.dynamic-menu", "style": "dmenu" }
-]
+`-fn`, `-nb`, `-nf`, `-sb` and `-sf` override the theme, the same way they
+override `config.def.h` in dmenu.
+
+### Stock dmenu colors
+
+To get dmenu's own look, pass its `config.def.h` defaults:
+
+```bash
+dmenu -fn monospace:size=10 -nb '#222222' -nf '#bbbbbb' -sb '#005577' -sf '#eeeeee'
 ```
 
-| `style` | Colors and font | Row height |
-|---|---|---|
-| `omarchy` (default) | The Omarchy theme's menu colors and font. Items picked with Ctrl+Return use the theme accent | The Omarchy bar height, while the bar is at the top or bottom |
-| `dmenu` | dmenu's defaults: `monospace:size=10`, `#bbbbbb` on `#222222`, selected `#eeeeee` on `#005577` | Font height + 2 px, as in dmenu |
+That is exactly what dwm passes, so a dwm keybinding works here unchanged:
 
-The `-fn`, `-nb`, `-nf`, `-sb` and `-sf` flags override either style, the same
-way they override `config.def.h` in dmenu.
+```bash
+dmenu_run -m 0 -fn monospace:size=10 -nb '#222222' -nf '#bbbbbb' -sb '#005577' -sf '#eeeeee'
+```
+
+For a permanent stock-looking launcher, put those flags in your keybinding:
+
+```lua
+o.bind("SUPER + D", "Dynamic menu",
+  "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run -fn monospace:size=10 -nb '#222222' -nf '#bbbbbb' -sb '#005577' -sf '#eeeeee'")
+```
+
+Colors set this way are fixed, so changing theme leaves them alone. Leave them
+out to follow the theme instead.
+
+Rows are always as tall as the Omarchy bar when the bar is horizontal. dmenu
+uses font height plus 2px because that was dwm's bar height. Omarchy's bar has
+its own height, so the menu matches that instead.
 
 ## How it works
 
-- **`bin/dmenu`:** parses the flags the way `main()` in `dmenu.c` does. It
-  streams stdin into a temporary file and summons the plugin with
-  `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`, passing only
-  the file's path. Like dmenu reading its own stdin, there's no limit on how much
-  you pipe in.
-- **Results:** the menu appends each printed line to a temporary file and writes
-  the exit status to a second one when it closes. `bin/dmenu` passes the lines
-  on as they arrive, so Ctrl+Return picks reach the caller straight away, the
-  same as dmenu writing to stdout.
-- **`Engine.js`:** dmenu's `keypress()`, `calcoffsets()` and `drawmenu()`,
-  ported function by function and kept free of Qt so node can test it.
-  `Match.js` is dmenu's `match()`. `DynamicMenu.qml` draws the result on a
-  layer-shell surface that takes the keyboard while it is open.
-- **`bin/dmenu_path`:** lists the executables on `$PATH`, cached in
-  `~/.cache/dmenu_run`, using the same rules as dmenu's `stest -flx`.
-  `bin/dmenu_run` pipes that list into `dmenu` and runs the pick in `$SHELL`.
+`bin/dmenu` parses the flags the way `main()` in `dmenu.c` does. It streams
+stdin into a temporary file and summons the plugin with
+`omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'`, passing only
+the file's path. Like dmenu reading its own stdin, there is no limit on how much
+you pipe in.
 
-**Differences from dmenu:**
+The menu appends each printed line to a temporary file and writes the exit
+status to a second one when it closes. `bin/dmenu` passes the lines on as they
+arrive, so Ctrl+Return picks reach the caller straight away, the same as dmenu
+writing to stdout.
+
+`Engine.js` holds dmenu's `keypress()`, `calcoffsets()` and `drawmenu()`, ported
+function by function and kept free of Qt so node can test it. `Match.js` is
+dmenu's `match()`. `DynamicMenu.qml` draws the result on a layer-shell surface
+that takes the keyboard while it is open.
+
+`bin/dmenu_path` lists the executables on `$PATH`, cached in
+`~/.cache/dmenu_run`, using the same rules as dmenu's `stest -flx`.
+`bin/dmenu_run` pipes that list into `dmenu` and runs the pick in `$SHELL`.
+
+### Differences from dmenu
+
 - Long items are cut off with `…`, not `...`.
 - `-m` counts monitors in the order Quickshell lists them.
 - A second `dmenu` started while one is open replaces it. In dmenu, the second
@@ -219,7 +243,8 @@ omarchy restart shell                     # QML changes need a restart to show u
 printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 ```
 
-**Files:**
+### Files
+
 - `manifest.json`
 - `DynamicMenu.qml`: the bar
 - `Engine.js`, `Match.js`: dmenu's logic
@@ -230,4 +255,4 @@ printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 ## License
 
 MIT. The input handling, matching and scripts are ported from dmenu 5.4, whose
-MIT/X Consortium licence and copyright notices are included in `LICENSE`.
+MIT/X Consortium license and copyright notices are included in `LICENSE`.

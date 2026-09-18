@@ -20,11 +20,20 @@ for dir in $PATH; do
 done
 
 if $stale; then
+  # The list is built in a temp file and moved into place. Writing the cache
+  # directly means an interrupted run leaves a truncated file behind, and
+  # since no PATH directory is newer than it any more, every later run would
+  # serve that short list instead of rebuilding.
+  tmp="$cache.$$"
+  trap 'rm -f "$tmp"' EXIT
+
   # stest -flx $PATH: regular files (links followed) you can execute, hidden
   # names skipped.
   for dir in $PATH; do
     [[ -d $dir ]] && find -L "$dir" -mindepth 1 -maxdepth 1 ! -name '.*' -type f -executable -printf '%f\n' 2>/dev/null
-  done | sort -u | tee "$cache"
-else
-  cat "$cache"
+  done | sort -u > "$tmp"
+
+  mv "$tmp" "$cache"
 fi
+
+cat "$cache"
