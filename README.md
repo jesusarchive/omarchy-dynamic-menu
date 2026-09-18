@@ -38,8 +38,16 @@ rsync -a --delete --exclude .git ./ ~/.config/omarchy/plugins/jesusarchive.dynam
 omarchy plugin enable jesusarchive.dynamic-menu
 ```
 
-Requirements: `bash`, `jq` and `wl-paste` (wl-clipboard). All three ship with
-Omarchy.
+Requires Omarchy 4.0 (Quattro) with shell plugin support. The plugin also uses
+`bash`, `jq` and `wl-paste` from `wl-clipboard`. Omarchy ships all three.
+
+### Update
+
+Git-managed installations update through Omarchy:
+
+```bash
+omarchy plugin update jesusarchive.dynamic-menu
+```
 
 ### Keybinding
 
@@ -100,6 +108,9 @@ omarchy plugin remove jesusarchive.dynamic-menu
 ```
 
 Then delete your keybinding from `bindings.lua`.
+
+Removal leaves the command cache at `~/.cache/dmenu_run`. It is safe to leave
+in place or delete manually.
 
 ## Use
 
@@ -233,6 +244,20 @@ that takes the keyboard while it is open.
 - A second `dmenu` started while one is open replaces it. In dmenu, the second
   one fails to grab the keyboard.
 
+## Files and permissions
+
+The plugin does not use the network or request administrator access.
+
+`bin/dmenu` creates private temporary files for the input, selected items and
+exit status, then removes them when it exits. It reads the clipboard only after
+Ctrl+Y or Ctrl+Shift+Y. `bin/dmenu_path` stores the executable-name cache at
+`~/.cache/dmenu_run`.
+
+The optional `bin/link-commands` helper writes only the `dmenu`, `dmenu_run`
+and `dmenu_path` links under `~/.local/bin`. It refuses to replace files it did
+not create, and `bin/link-commands --remove` removes only links that point back
+to this plugin.
+
 ## Development
 
 ```bash
@@ -255,4 +280,5 @@ printf 'foo\nbar\nfoobar\n' | bin/dmenu -p Pick; echo "exit=$?"
 ## License
 
 MIT. The input handling, matching and scripts are ported from dmenu 5.4, whose
-MIT/X Consortium license and copyright notices are included in `LICENSE`.
+MIT/X Consortium license and copyright notices are included in
+`THIRD_PARTY_NOTICES.md`.
