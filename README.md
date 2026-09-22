@@ -51,46 +51,6 @@ Press Enter to select or Escape to cancel. If nothing matches, Enter submits you
 
 Only one menu can be active at a time. Menus accept up to 20,000 items of UTF-8 text and 2 MiB of input, with at most 8 KiB per item. At most 50 items appear at once, with fewer on smaller screens. Search supports up to 64 distinct words. Total output is limited to 2 MiB per menu.
 
-## Examples
-
-Create your own menu by passing a list of choices to `dmenu` and handling the selection in your script.
-
-### Session menu
-
-This session menu lets you lock, suspend, log out, reboot, or shut down.
-
-![Session menu with Lock, Suspend, Log out, Reboot, and Shut down](assets/session-menu.png)
-
-Save the following script as `~/session-menu.sh`. It uses the plugin's full path, so the optional command links are not needed.
-
-```bash
-#!/bin/bash
-
-dmenu="$HOME/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu"
-choice=$(printf '%s\n' 'Lock' 'Suspend' 'Log out' 'Reboot' 'Shut down' |
-  "$dmenu" -i -p 'Session:' -l 5) || exit
-
-case "$choice" in
-  Lock)        omarchy system lock ;;
-  Suspend)     systemctl suspend ;;
-  'Log out')   omarchy system logout ;;
-  Reboot)      omarchy system reboot ;;
-  'Shut down') omarchy system shutdown ;;
-esac
-```
-
-Run it from a terminal:
-
-```bash
-bash ~/session-menu.sh
-```
-
-Type to filter, press Enter to run the selected action, or Escape to cancel. For example, typing `reboot` shows:
-
-![Session menu filtered to Reboot](assets/session-menu-filtered.png)
-
-To add your own action, add its label to `printf` and its command to the `case` block.
-
 ## Updating
 
 Update the installed plugin from a terminal:
