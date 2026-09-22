@@ -4,7 +4,7 @@
 # scripts that call them by name, as symlinks in ~/.local/bin. Only needed for
 # those scripts; a keybinding can run bin/dmenu_run by its full path.
 #
-# It leaves alone any existing file that isn't one of its own links.
+# It does not replace files or links created outside this plugin.
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ case "${1-}" in
       if [[ -L $link && $(readlink -f "$link") == "$bin/$name" ]]; then
         echo "$link already links here"
       elif [[ -e $link || -L $link ]]; then
-        echo "$link exists and isn't ours, leaving it" >&2
+        echo "$link does not point to this plugin; leaving it unchanged" >&2
       else
         ln -s "$bin/$name" "$link"
         echo "linked $link"

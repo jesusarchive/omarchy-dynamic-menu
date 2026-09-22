@@ -7,8 +7,8 @@ import qs.Commons
 import "Match.js" as Match
 import "Engine.js" as Engine
 
-// The dmenu bar. Engine.js does what dmenu.c does (input, matching, pages);
-// this file draws its layout and hands it keys.
+// Engine.js handles dmenu input, matching, and paging. This file renders the
+// menu and forwards key events.
 Item {
   id: root
 
@@ -49,9 +49,9 @@ Item {
 
   property font menuFont: root.parseFont(root.fontSpec)
   // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
-  // That is also dwm's bar height, so dmenu sits exactly over dwm's bar. The
-  // number was only ever a way of matching the bar, so match the Omarchy bar
-  // instead of copying it. A bar on the side has no height to match.
+  // That is also dwm's bar height, so dmenu aligns with the dwm bar. Use the
+  // Omarchy bar height for the same alignment. A side bar has no height to
+  // match.
   property string barPosition: "top"
   readonly property int fontHeight: Math.ceil(metrics.ascent) + Math.ceil(metrics.descent)
   readonly property int lrpad: fontHeight
@@ -90,7 +90,7 @@ Item {
     return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
   }
 
-  // `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'` lands here.
+  // `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'` calls this.
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
@@ -126,7 +126,7 @@ Item {
     }
   }
 
-  // The request waiting for its items file, until show() takes it.
+  // These properties hold the request until show() consumes it.
   property var pendingPayload: null
   property string pendingItemsFile: ""
 

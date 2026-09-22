@@ -1,8 +1,8 @@
 # Dynamic Menu for Omarchy
 
-Dynamic Menu brings [suckless dmenu](https://tools.suckless.org/dmenu/) to the [Omarchy](https://omarchy.org) shell. It reads options from standard input, opens a menu using the current Omarchy theme, and prints the selected option to standard output.
+Dynamic Menu is a port of [suckless dmenu](https://tools.suckless.org/dmenu/) for the [Omarchy](https://omarchy.org) shell. It reads newline-separated options from standard input and prints the selected option to standard output. The menu uses the current Omarchy theme.
 
-It implements dmenu 5.4's standard matching, keyboard controls, paging, vertical lists, fonts, colors, and command-line options.
+It supports dmenu 5.4's matching, keyboard controls, paging, vertical lists, fonts, colors, and command-line options.
 
 ![dmenu_run on an empty Omarchy workspace](preview.png?raw=true&v=2)
 
@@ -27,7 +27,7 @@ Add a keybinding to `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
 ```
 
-Use any free key combination. `dmenu_run` lists the commands on your `$PATH` and runs the selected command.
+Use any unused key combination. `dmenu_run` lists the commands on your `$PATH` and runs the selected command.
 
 ### Add the commands to PATH
 
@@ -69,7 +69,7 @@ Remove the plugin:
 omarchy plugin remove jesusarchive.dynamic-menu
 ```
 
-Then remove its entry from `~/.config/hypr/bindings.lua`. The plugin may leave an executable-name cache at `~/.cache/dmenu_run`.
+Then remove its entry from `~/.config/hypr/bindings.lua`. Delete `~/.cache/dmenu_run` if you do not want to keep the executable-name cache.
 
 ## License and attribution
 

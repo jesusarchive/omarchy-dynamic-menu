@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Pick a program from $PATH and run it, like dmenu's dmenu_run.
-# It calls its siblings by path, through bash, so a keybinding works even when
-# Hyprland's $PATH doesn't reach them or a copy lost its executable bits.
+# It calls the other scripts by path through bash, so the keybinding does not
+# depend on Hyprland's $PATH or executable file modes.
 
 bin="$(dirname "$(readlink -f "$0")")"
 

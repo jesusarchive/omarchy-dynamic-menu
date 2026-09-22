@@ -74,8 +74,8 @@ rm -f "$done_file"
 
 # The menu surface takes the keyboard exclusively, so a caller killed while it
 # is open would leave it on screen with the grab held. The done file exists
-# only once the menu has closed itself, so its absence means we still owe a
-# hide.
+# only once the menu has closed itself. If it is absent, the cleanup handler
+# must hide the menu.
 cleanup() {
   [[ -e $done_file ]] || omarchy-shell shell hide "$plugin_id" >/dev/null 2>&1 || true
   rm -f "$items_file" "$selection_file" "$done_file" "$done_file.tmp"
@@ -143,7 +143,7 @@ while [[ ! -e $done_file ]]; do
   flush
   sleep 0.05
   if (( ++ticks % 40 == 0 )) && ! omarchy-shell shell ping >/dev/null 2>&1; then
-    echo "dmenu: the Omarchy shell went away" >&2
+    echo "dmenu: the Omarchy shell stopped responding" >&2
     exit 1
   fi
 done

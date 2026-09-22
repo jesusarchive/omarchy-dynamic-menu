@@ -1,7 +1,7 @@
 // Item matching as in suckless dmenu's match(), kept Qt-free so node can test it.
 //
-// The input is split on spaces and an item must contain every word. Matches
-// come back in three groups, each in stdin order: items equal to the whole
+// The input is split on spaces and an item must contain every word. The
+// function returns three groups in stdin order: items equal to the whole
 // input, then items starting with the first word, then the rest. Empty input
 // matches everything.
 
