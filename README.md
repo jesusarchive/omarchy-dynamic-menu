@@ -2,7 +2,7 @@
 
 Dynamic Menu brings [suckless dmenu](https://tools.suckless.org/dmenu/) to the [Omarchy](https://omarchy.org) shell. It reads options from standard input, opens a menu using the current Omarchy theme, and prints the selected option to standard output.
 
-![Dynamic Menu](preview.png)
+![dmenu_run on an empty Omarchy workspace](preview.png)
 
 ## Requirements
 
