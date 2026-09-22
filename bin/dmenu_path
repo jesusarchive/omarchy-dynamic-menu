@@ -24,7 +24,7 @@ if $stale; then
   # directly means an interrupted run leaves a truncated file behind, and
   # since no PATH directory is newer than it any more, later runs would reuse
   # the truncated cache instead of rebuilding it.
-  tmp="$cache.$$"
+  tmp=$(mktemp "$cachedir/.dmenu_run.XXXXXXXXXXXX") || exit 1
   trap 'rm -f "$tmp"' EXIT
 
   # stest -flx $PATH: regular files (links followed) you can execute, hidden
@@ -33,7 +33,7 @@ if $stale; then
     [[ -d $dir ]] && find -L "$dir" -mindepth 1 -maxdepth 1 ! -name '.*' -type f -executable -printf '%f\n' 2>/dev/null
   done | sort -u > "$tmp"
 
-  mv "$tmp" "$cache"
+  mv -fT -- "$tmp" "$cache" || exit 1
 fi
 
 cat "$cache"

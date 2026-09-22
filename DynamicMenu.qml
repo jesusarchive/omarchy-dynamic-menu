@@ -27,8 +27,9 @@ Item {
   property bool atBottom: false
   property int monitor: -1
   property var menuScreen: null
-  property string selectionFile: ""
-  property string doneFile: ""
+  property string activeToken: ""
+  property bool finishing: false
+  readonly property string transportPath: decodeURIComponent(String(Qt.resolvedUrl("bin/menu-transport.py")).replace(/^file:\/\//, ""))
 
   // Colors and font follow the live Omarchy theme, so they track
   // `omarchy theme set`. -fn, -nb, -nf, -sb and -sf override them, the same
@@ -81,6 +82,9 @@ Item {
       if (kv[0] === "size") pointSize = Number(kv[1])
       else if (kv[0] === "pixelsize") { pixelSize = Number(kv[1]); pointSize = 0 }
     }
+    // Caller font overrides must not request enormous glyphs or panel sizes.
+    pointSize = Number.isFinite(pointSize) ? Math.max(0, Math.min(pointSize, 72)) : 0
+    pixelSize = Number.isFinite(pixelSize) ? Math.max(6, Math.min(pixelSize, 96)) : 14
     return pointSize > 0
       ? Qt.font({ family: family, pointSize: pointSize })
       : Qt.font({ family: family, pixelSize: pixelSize })
@@ -90,15 +94,28 @@ Item {
     return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
   }
 
-  // `omarchy-shell shell summon jesusarchive.dynamic-menu '<json>'` calls this.
+  // IPC carries only an unguessable request token. The helper obtains the
+  // items and options over that request's socket after validating the endpoint.
   function open(payloadJson) {
-    var payload = ({})
-    try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    if (root.activeToken || transport.running) return
+    if (typeof payloadJson !== "string" || payloadJson.length > 256) return
+    var payload
+    try { payload = JSON.parse(payloadJson) } catch (e) { return }
+    if (!payload || Array.isArray(payload) || typeof payload !== "object") return
+    if (Object.keys(payload).length !== 1 || typeof payload.token !== "string"
+        || !/^[0-9a-f]{32}$/.test(payload.token)) return
 
-    // A new request while one is pending cancels the old caller, but does not
-    // hide. Hiding would come back through close() and cancel this one too.
-    if (root.doneFile) root.writeExit(root.doneFile, 1)
+    root.activeToken = payload.token
+    root.finishing = false
+    transport.command = ["python3", "-I", root.transportPath, "serve", payload.token]
+    transport.running = true
+    startupTimer.restart()
+  }
 
+  function show(message) {
+    if (root.finishing || message.type !== "ready" || message.token !== root.activeToken) return
+    startupTimer.stop()
+    var payload = message.options
     root.atBottom = payload.bottom === true
     root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
     root.barPosition = String(payload.barPosition || "top")
@@ -107,37 +124,13 @@ Item {
     root.normFgSpec = String(payload.normFg || "")
     root.selBgSpec = String(payload.selBg || "")
     root.selFgSpec = String(payload.selFg || "")
-    root.selectionFile = String(payload.selectionFile || "")
-    root.doneFile = String(payload.doneFile || "")
-
     var screen = root.targetScreen()
     if (screen) root.menuScreen = screen
 
-    // bin/dmenu leaves stdin in a temp file. The menu shows once that file has
-    // loaded, like dmenu reading all of stdin before it maps its window.
-    root.pendingPayload = payload
-    root.pendingItemsFile = String(payload.itemsFile || "")
-    if (!root.pendingItemsFile) {
-      root.show("")
-    } else if (itemsView.path === root.pendingItemsFile) {
-      itemsView.reload()
-    } else {
-      itemsView.path = root.pendingItemsFile
-    }
-  }
-
-  // These properties hold the request until show() consumes it.
-  property var pendingPayload: null
-  property string pendingItemsFile: ""
-
-  function show(itemsText) {
-    var payload = root.pendingPayload
-    root.pendingPayload = null
-    root.pendingItemsFile = ""
-    if (!payload || !root.doneFile) return
-
-    root.menu = Engine.create(Engine.readstdin(itemsText), {
-      lines: Number.isInteger(payload.lines) ? payload.lines : 0,
+    // Limit rendered rows independently of the total item limit in the helper.
+    var maxRows = Math.max(0, Math.min(50, Math.floor((screen ? screen.height : 1080) / root.bh) - 1))
+    root.menu = Engine.create(Engine.readstdin(message.text), {
+      lines: Math.min(Number.isInteger(payload.lines) ? payload.lines : 0, maxRows),
       caseInsensitive: payload.caseInsensitive === true,
       prompt: String(payload.prompt || ""),
       textw: root.textw,
@@ -147,7 +140,7 @@ Item {
     })
     root.revision++
     root.opened = true
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
   }
 
   function close() {
@@ -165,64 +158,72 @@ Item {
     return screens.length > 0 ? screens[0] : null
   }
 
-  // Results go to bin/dmenu through files. The menu appends each printed line
-  // to the selection file, then writes the exit status to the done file last.
-  // Writes run one at a time so they arrive in order.
-  property var writes: []
-
-  function queueWrite(script) {
-    root.writes.push(script)
-    root.runNextWrite()
-  }
-
-  function runNextWrite() {
-    if (writer.running || root.writes.length === 0) return
-    writer.command = ["bash", "-c", root.writes.shift()]
-    writer.running = true
-  }
-
   function printLine(line) {
-    if (!root.selectionFile) return
-    root.queueWrite("printf '%s\\n' " + Util.shellQuote(line) + " >> " + Util.shellQuote(root.selectionFile))
+    if (!root.activeToken || root.finishing) return
+    transport.write(JSON.stringify({ type: "output", text: line }) + "\n")
   }
 
-  function writeExit(doneFile, status) {
-    var tmp = Util.shellQuote(doneFile + ".tmp")
-    root.queueWrite("printf '%s' " + status + " > " + tmp + " && mv " + tmp + " " + Util.shellQuote(doneFile))
-  }
-
-  function finish(status) {
-    var doneFile = root.doneFile
+  function hideMenu() {
     root.opened = false
-    root.pendingPayload = null
-    root.pendingItemsFile = ""
-    if (!doneFile) return
-    root.doneFile = ""
-    root.writeExit(doneFile, status)
-    root.selectionFile = ""
+    root.menu = null
+    root.revision++
+    pasteProc.running = false
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
   }
 
-  FileView {
-    id: itemsView
-    printErrors: false
-    // A path whose request was cancelled or replaced is ignored.
-    onLoaded: if (path === root.pendingItemsFile) root.show(text())
-    onLoadFailed: if (path === root.pendingItemsFile) root.show("")
+  function finish(status) {
+    if (!root.activeToken || root.finishing) return
+    root.finishing = true
+    startupTimer.stop()
+    transport.write(JSON.stringify({ type: "exit", status: status === 0 ? 0 : 1 }) + "\n")
+    root.hideMenu()
+    // A non-reading peer must not keep this request alive indefinitely.
+    shutdownTimer.restart()
+  }
+
+  function transportStopped() {
+    startupTimer.stop()
+    shutdownTimer.stop()
+    root.finishing = true
+    root.activeToken = ""
+    root.hideMenu()
+  }
+
+  Timer {
+    id: startupTimer
+    interval: 20000
+    onTriggered: {
+      transport.signal(9)
+      if (!transport.running) root.transportStopped()
+    }
+  }
+
+  Timer {
+    id: shutdownTimer
+    interval: 3000
+    onTriggered: transport.signal(9)
   }
 
   Process {
-    id: writer
-    onExited: Qt.callLater(root.runNextWrite)
+    id: transport
+    stdinEnabled: true
+    stdout: SplitParser {
+      onRead: function(data) {
+        try { root.show(JSON.parse(data)) }
+        catch (e) { root.finish(1) }
+      }
+    }
+    onExited: root.transportStopped()
   }
 
   Process {
     id: pasteProc
+    property string requestToken: ""
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (!root.menu || !root.opened) return
+        if (!root.menu || !root.opened || root.finishing || pasteProc.requestToken !== root.activeToken) return
         Engine.paste(root.menu, text)
         root.revision++
       }
@@ -288,7 +289,7 @@ Item {
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         event.accepted = true
-        if (!root.menu || !root.opened) return
+        if (!root.menu || !root.opened || root.finishing) return
         var result = Engine.keypress(root.menu, {
           key: root.keyName(event),
           text: event.text,
@@ -298,7 +299,8 @@ Item {
         })
         if (result.output !== null) root.printLine(result.output)
         if (result.paste && !pasteProc.running) {
-          pasteProc.command = result.paste === "primary" ? ["wl-paste", "--primary", "--no-newline"] : ["wl-paste", "--no-newline"]
+          pasteProc.requestToken = root.activeToken
+          pasteProc.command = ["python3", "-I", root.transportPath, "paste", result.paste]
           pasteProc.running = true
         }
         root.revision++

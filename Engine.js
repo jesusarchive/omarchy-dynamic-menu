@@ -6,6 +6,7 @@
 // like dmenu's TEXTW().
 
 var WORD_DELIMITERS = " "
+var MAX_INPUT = 8192
 
 // readstdin(): one item per line, with the newline stripped. A final line
 // without a newline is still an item; empty lines are items too.
@@ -92,6 +93,7 @@ function match(state) {
 // of it.
 function insert(state, str, n) {
   if (n > 0) {
+    if (state.text.length + n > MAX_INPUT) return
     state.text = state.text.slice(0, state.cursor) + str + state.text.slice(state.cursor)
   } else {
     state.text = state.text.slice(0, state.cursor + n) + state.text.slice(state.cursor)
@@ -178,10 +180,11 @@ function keypress(state, ev) {
       insert(state, null, -state.cursor)
       return result
     case "w": // delete word
-      while (state.cursor > 0 && isDelimiter(state.text[nextrune(state, -1)]))
-        insert(state, null, nextrune(state, -1) - state.cursor)
-      while (state.cursor > 0 && !isDelimiter(state.text[nextrune(state, -1)]))
-        insert(state, null, nextrune(state, -1) - state.cursor)
+      var originalCursor = state.cursor
+      movewordedge(state, -1)
+      var wordStart = state.cursor
+      state.cursor = originalCursor
+      insert(state, null, wordStart - originalCursor)
       return result
     case "y": // paste selection
     case "Y":
