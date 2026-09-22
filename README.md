@@ -45,33 +45,13 @@ Pass a list through standard input:
 printf 'Lock\nSuspend\nLog out\n' | dmenu -p 'Session:'
 ```
 
-Open the program launcher with case-insensitive matching:
+Open the program launcher:
 
 ```bash
-dmenu_run -i -p 'Run:'
+dmenu_run
 ```
 
-Supported options:
-
-```text
-dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]
-      [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]
-```
-
-| Option | Purpose |
-|---|---|
-| `-b` | Open at the bottom of the screen |
-| `-i` | Match without case sensitivity |
-| `-l lines` | Show a vertical list |
-| `-m monitor` | Open on a numbered monitor |
-| `-p prompt` | Set the prompt |
-| `-fn font` | Override the theme font |
-| `-nb`, `-nf` | Set normal colors |
-| `-sb`, `-sf` | Set selected colors |
-| `-v` | Print the version |
-| `-f`, `-w windowid` | Accepted for compatibility but have no effect |
-
-The menu supports dmenu's keyboard controls, matching, paging, vertical lists, and Ctrl+Return multi-selection.
+Use `-i` for case-insensitive matching, `-p` to add a prompt, or `-l` to show a vertical list.
 
 ## Removal
 
