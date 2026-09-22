@@ -26,19 +26,49 @@ o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dyna
 
 ## Usage
 
-To use `dmenu`, `dmenu_run`, and `dmenu_path` by name, create the optional command links:
+The keybinding above works without any extra setup.
+
+If you want to run `dmenu`, `dmenu_run`, or `dmenu_path` by name in a terminal or script, create links in `~/.local/bin`:
 
 ```bash
 ~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/link-commands
 ```
 
-Make sure `~/.local/bin` is on your `$PATH`. Then pass a list to `dmenu`:
+This step is optional and requires `~/.local/bin` on your `$PATH`. With the links in place, you can pass a list to `dmenu`:
 
 ```bash
 printf 'Lock\nSuspend\nLog out\n' | dmenu -p 'Session:'
 ```
 
 Press Enter to select or Escape to cancel. Use `-i` for case-insensitive matching and `-l 10` for a vertical list.
+
+### Create your own menu
+
+This session menu lets you lock, suspend, log out, reboot, or shut down. Save it as `~/session-menu.sh` and run it with `bash ~/session-menu.sh`. It uses the plugin's full path, so command links are not needed.
+
+```bash
+#!/bin/bash
+
+dmenu="$HOME/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu"
+choice=$(printf '%s\n' 'Lock' 'Suspend' 'Log out' 'Reboot' 'Shut down' |
+  "$dmenu" -i -p 'Session:' -l 5) || exit
+
+case "$choice" in
+  Lock)        omarchy system lock ;;
+  Suspend)     systemctl suspend ;;
+  'Log out')   omarchy system logout ;;
+  Reboot)      omarchy system reboot ;;
+  'Shut down') omarchy system shutdown ;;
+esac
+```
+
+Press Enter to run the selected action or Escape to cancel. Change the labels and their `case` commands to add your own actions.
+
+![Session menu with Lock, Suspend, Log out, Reboot, and Shut down](assets/session-menu.png)
+
+Type `reboot` to filter the menu:
+
+![Session menu filtered to Reboot](assets/session-menu-filtered.png)
 
 ## Removal
 
