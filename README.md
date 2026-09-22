@@ -1,6 +1,6 @@
 # Dynamic Menu for Omarchy
 
-A port of [dmenu](https://tools.suckless.org/dmenu/) by [suckless](https://suckless.org/) for the Omarchy shell.
+A [dmenu](https://tools.suckless.org/dmenu/) port for the Omarchy shell.
 
 It reads a list from standard input and writes your selection to standard output.
 
@@ -8,10 +8,10 @@ It reads a list from standard input and writes your selection to standard output
 
 ## Requirements
 
-- Omarchy Quattro with shell plugin support.
+- Omarchy Quattro with shell plugin support and the Omarchy shell running.
 - Quickshell. Tested with version 0.3.1.
 - Bash for the command wrappers.
-- Python 3 for communication with the shell.
+- Python 3.9 or newer for communication with the shell.
 - `jq` for reading configuration and building menu options.
 - `wl-clipboard` for pasting clipboard text into the menu.
 
@@ -29,7 +29,7 @@ Add an unused keybinding to `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + D", "Dynamic menu", "~/.config/omarchy/plugins/jesusarchive.dynamic-menu/bin/dmenu_run")
 ```
 
-`dmenu_run` lists commands from your `$PATH` and runs the one you select.
+`dmenu_run` lists commands from your `$PATH`. It runs your selection or typed command through `$SHELL`, falling back to `/bin/sh`.
 
 ## Usage
 
@@ -47,13 +47,21 @@ This step is optional and requires `~/.local/bin` on your `$PATH`. With the link
 printf 'Lock\nSuspend\nLog out\n' | dmenu -p 'Session:'
 ```
 
-Press Enter to select or Escape to cancel. Use `-i` for case-insensitive matching and `-l 10` for a vertical list.
+Press Enter to select or Escape to cancel. If nothing matches, Enter submits your typed text. Shift+Enter submits typed text even when an item matches. Ctrl+Enter outputs the selection and keeps the menu open. Use `-i` for case-insensitive matching and `-l 10` for a vertical list.
 
-Menus accept up to 20,000 items and 2 MiB of input, with at most 8 KiB per item. Search supports up to 64 distinct words; Shift+Enter submits your typed text.
+Only one menu can be active at a time. Menus accept up to 20,000 items of UTF-8 text and 2 MiB of input, with at most 8 KiB per item. At most 50 items appear at once, with fewer on smaller screens. Search supports up to 64 distinct words. Total output is limited to 2 MiB per menu.
 
-### Create your own menu
+## Examples
 
-This session menu lets you lock, suspend, log out, reboot, or shut down. Save it as `~/session-menu.sh` and run it with `bash ~/session-menu.sh`. It uses the plugin's full path, so command links are not needed.
+Create your own menu by passing a list of choices to `dmenu` and handling the selection in your script.
+
+### Session menu
+
+This session menu lets you lock, suspend, log out, reboot, or shut down.
+
+![Session menu with Lock, Suspend, Log out, Reboot, and Shut down](assets/session-menu.png)
+
+Save the following script as `~/session-menu.sh`. It uses the plugin's full path, so the optional command links are not needed.
 
 ```bash
 #!/bin/bash
@@ -71,13 +79,25 @@ case "$choice" in
 esac
 ```
 
-Press Enter to run the selected action or Escape to cancel. Change the labels and their `case` commands to add your own actions.
+Run it from a terminal:
 
-![Session menu with Lock, Suspend, Log out, Reboot, and Shut down](assets/session-menu.png)
+```bash
+bash ~/session-menu.sh
+```
 
-Type `reboot` to filter the menu:
+Type to filter, press Enter to run the selected action, or Escape to cancel. For example, typing `reboot` shows:
 
 ![Session menu filtered to Reboot](assets/session-menu-filtered.png)
+
+To add your own action, add its label to `printf` and its command to the `case` block.
+
+## Updating
+
+Update the installed plugin from a terminal:
+
+```bash
+omarchy plugin update jesusarchive.dynamic-menu
+```
 
 ## Removal
 
@@ -97,4 +117,4 @@ Remove the keybinding from `~/.config/hypr/bindings.lua`.
 
 ## License and attribution
 
-This plugin uses the [MIT license](LICENSE). See [the third-party notices](THIRD_PARTY_NOTICES.md) for dmenu's license and attribution.
+This plugin uses the [MIT license](LICENSE). The original [dmenu](https://tools.suckless.org/dmenu/) is a [suckless](https://suckless.org/) project. See [the third-party notices](THIRD_PARTY_NOTICES.md) for dmenu and the bundled js-sha256 library.
