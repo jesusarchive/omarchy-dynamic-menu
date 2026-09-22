@@ -7,6 +7,8 @@ import qs.Commons
 import "Match.js" as Match
 import "Engine.js" as Engine
 import "Protocol.js" as Protocol
+import "Auth.js" as Auth
+import "vendor/Sha256.js" as Sha256
 
 // Engine.js handles dmenu input, matching, and paging. This file renders the
 // menu and forwards key events.
@@ -31,6 +33,7 @@ Item {
   property string activeToken: ""
   property bool finishing: false
   property var incoming: null
+  property var authentication: null
   property var transport: null
   property int printedBytes: 0
   readonly property string transportPath: decodeURIComponent(String(Qt.resolvedUrl("bin/menu-transport.py")).replace(/^file:\/\//, ""))
@@ -52,7 +55,7 @@ Item {
   property color outBg: Color.accent
   property color outFg: Color.menu.background
 
-  property font menuFont: root.parseFont(root.fontSpec)
+  property font menuFont: logic.parseFont(root.fontSpec)
   // drw.c: fonts->h is ascent + descent, lrpad = fonts->h, bh = fonts->h + 2.
   // That is also dwm's bar height, so dmenu aligns with the dwm bar. Use the
   // Omarchy bar height for the same alignment. A side bar has no height to
@@ -68,169 +71,204 @@ Item {
     font: root.menuFont
   }
 
-  // A font family with an optional size, such as "monospace:size=10",
-  // "monospace:pixelsize=14", or "Family-10".
-  // Without -fn, the menu uses the theme's font.
-  function parseFont(spec) {
-    var family = Style.font.menuFamily
-    var pixelSize = Style.font.body
-    var pointSize = 0
-    var parts = String(spec || "").split(":")
-    if (parts[0]) {
-      var sized = parts[0].match(/^(.*)-(\d+(?:\.\d+)?)$/)
-      family = sized ? sized[1] : parts[0]
-      if (sized) pointSize = Number(sized[2])
+  // Only open/close are host entry points. Omarchy's generic shell.call IPC
+  // can invoke every root method, so output and authentication stay on a child.
+  function open(payloadJson) { logic.open(payloadJson) }
+  function close() { logic.finish(1) }
+
+  QtObject {
+    id: logic
+    function parseFont(spec) {
+      var family = Style.font.menuFamily
+      var pixelSize = Style.font.body
+      var pointSize = 0
+      var parts = String(spec || "").split(":")
+      if (parts[0]) {
+        var sized = parts[0].match(/^(.*)-(\d+(?:\.\d+)?)$/)
+        family = sized ? sized[1] : parts[0]
+        if (sized) pointSize = Number(sized[2])
+      }
+      for (var i = 1; i < parts.length; i++) {
+        var kv = parts[i].split("=")
+        if (kv[0] === "size") pointSize = Number(kv[1])
+        else if (kv[0] === "pixelsize") { pixelSize = Number(kv[1]); pointSize = 0 }
+      }
+      // Caller font overrides must not request enormous glyphs or panel sizes.
+      pointSize = Number.isFinite(pointSize) ? Math.max(0, Math.min(pointSize, 72)) : 0
+      pixelSize = Number.isFinite(pixelSize) ? Math.max(6, Math.min(pixelSize, 96)) : 14
+      return pointSize > 0
+        ? Qt.font({ family: family, pointSize: pointSize })
+        : Qt.font({ family: family, pixelSize: pixelSize })
     }
-    for (var i = 1; i < parts.length; i++) {
-      var kv = parts[i].split("=")
-      if (kv[0] === "size") pointSize = Number(kv[1])
-      else if (kv[0] === "pixelsize") { pixelSize = Number(kv[1]); pointSize = 0 }
+
+    function textw(str) {
+      return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
     }
-    // Caller font overrides must not request enormous glyphs or panel sizes.
-    pointSize = Number.isFinite(pointSize) ? Math.max(0, Math.min(pointSize, 72)) : 0
-    pixelSize = Number.isFinite(pixelSize) ? Math.max(6, Math.min(pixelSize, 96)) : 14
-    return pointSize > 0
-      ? Qt.font({ family: family, pointSize: pointSize })
-      : Qt.font({ family: family, pixelSize: pixelSize })
-  }
 
-  function textw(str) {
-    return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
-  }
+    function open(payloadJson) {
+      if (root.activeToken || root.transport) return
+      if (typeof payloadJson !== "string" || payloadJson.length > 256) return
+      var payload
+      try { payload = JSON.parse(payloadJson) } catch (e) { return }
+      if (!payload || Array.isArray(payload) || typeof payload !== "object") return
+      if (Object.keys(payload).length !== 2 || typeof payload.token !== "string"
+          || !/^[0-9a-f]{32}$/.test(payload.token) || typeof payload.secret !== "string"
+          || !/^[0-9a-f]{64}$/.test(payload.secret)) return
 
-  // IPC carries a public request ID. Connecting inside Quickshell lets the
-  // caller authenticate this socket with the shell's kernel process identity.
-  function open(payloadJson) {
-    if (root.activeToken || root.transport) return
-    if (typeof payloadJson !== "string" || payloadJson.length > 256) return
-    var payload
-    try { payload = JSON.parse(payloadJson) } catch (e) { return }
-    if (!payload || Array.isArray(payload) || typeof payload !== "object") return
-    if (Object.keys(payload).length !== 1 || typeof payload.token !== "string"
-        || !/^[0-9a-f]{32}$/.test(payload.token)) return
+      root.activeToken = payload.token
+      root.finishing = false
+      var runtime = Quickshell.env("XDG_RUNTIME_DIR")
+      if (!runtime || runtime[0] !== "/" || runtime.split("/").indexOf("..") !== -1) {
+        root.activeToken = ""
+        return
+      }
+      root.authentication = Auth.create(payload.token, payload.secret, Sha256.sha256.hmac)
+      payload.secret = ""
+      root.incoming = Protocol.create(payload.token)
+      root.printedBytes = 0
+      root.transport = transportComponent.createObject(root)
+      transport.path = runtime + "/omarchy-dynamic-menu/" + payload.token + "/socket"
+      shutdownTimer.stop()
+      startupTimer.restart()
+      transport.connected = true
+    }
 
-    root.activeToken = payload.token
-    root.finishing = false
-    var runtime = Quickshell.env("XDG_RUNTIME_DIR")
-    if (!runtime || runtime[0] !== "/" || runtime.split("/").indexOf("..") !== -1) {
+    function show(message) {
+      if (root.finishing || message.type !== "ready" || message.token !== root.activeToken) return
+      startupTimer.stop()
+      var payload = message.options
+      root.atBottom = payload.bottom === true
+      root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
+      root.barPosition = String(payload.barPosition || "top")
+      root.fontSpec = String(payload.font || "")
+      root.normBgSpec = String(payload.normBg || "")
+      root.normFgSpec = String(payload.normFg || "")
+      root.selBgSpec = String(payload.selBg || "")
+      root.selFgSpec = String(payload.selFg || "")
+      var screen = logic.targetScreen()
+      if (screen) root.menuScreen = screen
+
+      // Limit rendered rows independently of the total item limit in the helper.
+      var maxRows = Math.max(0, Math.min(50, Math.floor((screen ? screen.height : 1080) / root.bh) - 1))
+      root.menu = Engine.create(Engine.readstdin(message.text), {
+        lines: Math.min(Number.isInteger(payload.lines) ? payload.lines : 0, maxRows),
+        caseInsensitive: payload.caseInsensitive === true,
+        prompt: String(payload.prompt || ""),
+        textw: logic.textw,
+        lrpad: root.lrpad,
+        mw: root.menuScreen ? root.menuScreen.width : panel.width,
+        match: Match.match
+      })
+      root.revision++
+      root.opened = true
+      Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
+    }
+
+    function targetScreen() {
+      var screens = Quickshell.screens
+      if (root.monitor >= 0 && root.monitor < screens.length) return screens[root.monitor]
+      var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
+      for (var i = 0; i < screens.length; i++)
+        if (screens[i].name === focused) return screens[i]
+      return screens.length > 0 ? screens[0] : null
+    }
+
+    function printLine(line) {
+      if (!root.activeToken || root.finishing || !root.authentication || !root.authentication.ready) return
+      var bytes
+      try { bytes = Protocol.utf8Length(line) + 1 } catch (e) { logic.finish(1); return }
+      if (root.printedBytes + bytes > 2 * 1024 * 1024) { logic.finish(1); return }
+      root.printedBytes += bytes
+      var connection = root.transport
+      connection.write(Auth.sign(root.authentication, { type: "output", text: line }))
+      if (root.transport === connection) connection.flush()
+    }
+
+    function hideMenu() {
+      root.opened = false
+      root.menu = null
+      root.revision++
+      pasteProc.running = false
+      if (root.shell && typeof root.shell.hide === "function")
+        root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
+    }
+
+    function finish(status) {
+      if (!root.activeToken || root.finishing) return
+      root.finishing = true
+      startupTimer.stop()
+      // Start this before disconnecting: a synchronous disconnect must stop it,
+      // rather than leave an old timer that could close the next request.
+      shutdownTimer.restart()
+      logic.hideMenu()
+      var connection = root.transport
+      if (!connection) return
+      if (root.authentication && root.authentication.ready)
+        connection.write(Auth.sign(root.authentication, { type: "exit", status: status === 0 ? 0 : 1 }))
+      if (root.transport !== connection) return
+      connection.flush()
+      if (root.transport === connection) connection.connected = false
+    }
+
+    function transportStopped() {
+      startupTimer.stop()
+      shutdownTimer.stop()
+      root.finishing = true
       root.activeToken = ""
-      return
+      root.incoming = null
+      Auth.clear(root.authentication)
+      root.authentication = null
+      var previous = root.transport
+      root.transport = null
+      if (previous) previous.destroy()
+      logic.hideMenu()
     }
-    root.incoming = Protocol.create(payload.token)
-    root.printedBytes = 0
-    root.transport = transportComponent.createObject(root)
-    transport.path = runtime + "/omarchy-dynamic-menu/" + payload.token + "/socket"
-    shutdownTimer.stop()
-    startupTimer.restart()
-    transport.connected = true
-  }
 
-  function show(message) {
-    if (root.finishing || message.type !== "ready" || message.token !== root.activeToken) return
-    startupTimer.stop()
-    var payload = message.options
-    root.atBottom = payload.bottom === true
-    root.monitor = Number.isInteger(payload.monitor) ? payload.monitor : -1
-    root.barPosition = String(payload.barPosition || "top")
-    root.fontSpec = String(payload.font || "")
-    root.normBgSpec = String(payload.normBg || "")
-    root.normFgSpec = String(payload.normFg || "")
-    root.selBgSpec = String(payload.selBg || "")
-    root.selFgSpec = String(payload.selFg || "")
-    var screen = root.targetScreen()
-    if (screen) root.menuScreen = screen
+    function keyName(event) {
+      var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+      if (event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {
+        var letter = String.fromCharCode(event.key)
+        return shift ? letter : letter.toLowerCase()
+      }
+      switch (event.key) {
+      case Qt.Key_Return:
+      case Qt.Key_Enter: return "Return"
+      case Qt.Key_Escape: return "Escape"
+      case Qt.Key_Tab: return "Tab"
+      case Qt.Key_Backspace: return "BackSpace"
+      case Qt.Key_Delete: return "Delete"
+      case Qt.Key_Home: return "Home"
+      case Qt.Key_End: return "End"
+      case Qt.Key_Left: return "Left"
+      case Qt.Key_Right: return "Right"
+      case Qt.Key_Up: return "Up"
+      case Qt.Key_Down: return "Down"
+      case Qt.Key_PageUp: return "Prior"
+      case Qt.Key_PageDown: return "Next"
+      case Qt.Key_BracketLeft: return "bracketleft"
+      }
+      return ""
+    }
 
-    // Limit rendered rows independently of the total item limit in the helper.
-    var maxRows = Math.max(0, Math.min(50, Math.floor((screen ? screen.height : 1080) / root.bh) - 1))
-    root.menu = Engine.create(Engine.readstdin(message.text), {
-      lines: Math.min(Number.isInteger(payload.lines) ? payload.lines : 0, maxRows),
-      caseInsensitive: payload.caseInsensitive === true,
-      prompt: String(payload.prompt || ""),
-      textw: root.textw,
-      lrpad: root.lrpad,
-      mw: root.menuScreen ? root.menuScreen.width : panel.width,
-      match: Match.match
-    })
-    root.revision++
-    root.opened = true
-    Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
-  }
-
-  function close() {
-    root.finish(1)
-  }
-
-  // -m picks a screen by index. Otherwise the menu goes where the focus is,
-  // like dmenu's default of the monitor holding the focused window.
-  function targetScreen() {
-    var screens = Quickshell.screens
-    if (root.monitor >= 0 && root.monitor < screens.length) return screens[root.monitor]
-    var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
-    for (var i = 0; i < screens.length; i++)
-      if (screens[i].name === focused) return screens[i]
-    return screens.length > 0 ? screens[0] : null
-  }
-
-  function printLine(line) {
-    if (!root.activeToken || root.finishing) return
-    var bytes
-    try { bytes = Protocol.utf8Length(line) + 1 } catch (e) { root.finish(1); return }
-    if (root.printedBytes + bytes > 2 * 1024 * 1024) { root.finish(1); return }
-    root.printedBytes += bytes
-    var connection = root.transport
-    connection.write(JSON.stringify({ type: "output", text: line }) + "\n")
-    if (root.transport === connection) connection.flush()
-  }
-
-  function hideMenu() {
-    root.opened = false
-    root.menu = null
-    root.revision++
-    pasteProc.running = false
-    if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "jesusarchive.dynamic-menu")
-  }
-
-  function finish(status) {
-    if (!root.activeToken || root.finishing) return
-    root.finishing = true
-    startupTimer.stop()
-    // Start this before disconnecting: a synchronous disconnect must stop it,
-    // rather than leave an old timer that could close the next request.
-    shutdownTimer.restart()
-    root.hideMenu()
-    var connection = root.transport
-    if (!connection) return
-    connection.write(JSON.stringify({ type: "exit", status: status === 0 ? 0 : 1 }) + "\n")
-    if (root.transport !== connection) return
-    connection.flush()
-    if (root.transport === connection) connection.connected = false
-  }
-
-  function transportStopped() {
-    startupTimer.stop()
-    shutdownTimer.stop()
-    root.finishing = true
-    root.activeToken = ""
-    root.incoming = null
-    var previous = root.transport
-    root.transport = null
-    if (previous) previous.destroy()
-    root.hideMenu()
+    function colorsFor(scheme) {
+      if (scheme === "sel") return [root.selFg, root.selBg]
+      if (scheme === "out") return [root.outFg, root.outBg]
+      return [root.normFg, root.normBg]
+    }
   }
 
   Timer {
     id: startupTimer
     interval: 20000
     onTriggered: {
-      root.transportStopped()
+      logic.transportStopped()
     }
   }
 
   Timer {
     id: shutdownTimer
     interval: 3000
-    onTriggered: root.transportStopped()
+    onTriggered: logic.transportStopped()
   }
 
   Component {
@@ -242,13 +280,18 @@ Item {
         onRead: function(data) {
           if (root.transport !== requestSocket || !root.incoming || root.finishing) return
           try {
-            var message = Protocol.feed(root.incoming, data)
-            if (message) root.show(message)
-          } catch (e) { root.finish(1) }
+            Auth.feed(root.authentication, data, function(proof) {
+              requestSocket.write(proof)
+              requestSocket.flush()
+            }, function(payload) {
+              var message = Protocol.frame(root.incoming, payload)
+              if (message) logic.show(message)
+            })
+          } catch (e) { logic.finish(1) }
         }
       }
-      onConnectionStateChanged: if (!connected && root.transport === requestSocket) root.transportStopped()
-      onError: if (root.transport === requestSocket) root.transportStopped()
+      onConnectionStateChanged: if (!connected && root.transport === requestSocket) logic.transportStopped()
+      onError: if (root.transport === requestSocket) logic.transportStopped()
     }
   }
 
@@ -263,39 +306,6 @@ Item {
         root.revision++
       }
     }
-  }
-
-  // Turns a Qt key event into the keysym names Engine.keypress() expects.
-  function keyName(event) {
-    var shift = (event.modifiers & Qt.ShiftModifier) !== 0
-    if (event.key >= Qt.Key_A && event.key <= Qt.Key_Z) {
-      var letter = String.fromCharCode(event.key)
-      return shift ? letter : letter.toLowerCase()
-    }
-    switch (event.key) {
-    case Qt.Key_Return:
-    case Qt.Key_Enter: return "Return"
-    case Qt.Key_Escape: return "Escape"
-    case Qt.Key_Tab: return "Tab"
-    case Qt.Key_Backspace: return "BackSpace"
-    case Qt.Key_Delete: return "Delete"
-    case Qt.Key_Home: return "Home"
-    case Qt.Key_End: return "End"
-    case Qt.Key_Left: return "Left"
-    case Qt.Key_Right: return "Right"
-    case Qt.Key_Up: return "Up"
-    case Qt.Key_Down: return "Down"
-    case Qt.Key_PageUp: return "Prior"
-    case Qt.Key_PageDown: return "Next"
-    case Qt.Key_BracketLeft: return "bracketleft"
-    }
-    return ""
-  }
-
-  function colorsFor(scheme) {
-    if (scheme === "sel") return [root.selFg, root.selBg]
-    if (scheme === "out") return [root.outFg, root.outBg]
-    return [root.normFg, root.normBg]
   }
 
   PanelWindow {
@@ -326,20 +336,20 @@ Item {
         event.accepted = true
         if (!root.menu || !root.opened || root.finishing) return
         var result = Engine.keypress(root.menu, {
-          key: root.keyName(event),
+          key: logic.keyName(event),
           text: event.text,
           ctrl: (event.modifiers & Qt.ControlModifier) !== 0,
           shift: (event.modifiers & Qt.ShiftModifier) !== 0,
           alt: (event.modifiers & Qt.AltModifier) !== 0
         })
-        if (result.output !== null) root.printLine(result.output)
+        if (result.output !== null) logic.printLine(result.output)
         if (result.paste && !pasteProc.running) {
           pasteProc.requestToken = root.activeToken
           pasteProc.command = ["python3", "-I", root.transportPath, "paste", result.paste]
           pasteProc.running = true
         }
         root.revision++
-        if (result.exit !== null) root.finish(result.exit)
+        if (result.exit !== null) logic.finish(result.exit)
       }
     }
 
@@ -349,7 +359,7 @@ Item {
       delegate: Rectangle {
         id: box
         required property var modelData
-        readonly property var colors: root.colorsFor(modelData.scheme)
+        readonly property var colors: logic.colorsFor(modelData.scheme)
 
         x: modelData.x
         y: modelData.y * root.bh

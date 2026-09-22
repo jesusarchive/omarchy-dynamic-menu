@@ -2,12 +2,14 @@
 """Bounded, per-request Unix socket transport for the QML menu.
 
 The request ID is public. Only the process serving the selected Quickshell IPC
-endpoint can return menu results. Linux SO_PEERCRED supplies that identity.
+endpoint can return menu results. A private per-request secret authenticates
+the connection challenge and every message; SO_PEERCRED adds a process check.
 """
 
 import contextlib
 import fcntl
 import json
+import hmac
 import os
 import re
 import secrets
@@ -31,6 +33,8 @@ MAX_OPTIONS = 4096
 MAX_OUTPUT = MAX_TEXT * 4  # QML input is capped at 8192 UTF-16 code units.
 MAX_EVENT = MAX_OUTPUT * 6 + 256
 START_TIMEOUT = 15
+AUTH_TIMEOUT = 2
+PREFIX = "omarchy-dynamic-menu-v1\n"
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -93,14 +97,13 @@ def send(connection, message):
     connection.sendall(json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n")
 
 
-class Replies:
+class Frames:
     def __init__(self, connection, pid_fd):
         self.connection = connection
         self.pid_fd = pid_fd
         self.pending = bytearray()
 
-    def receive(self, limit=MAX_EVENT, frame_timeout=2):
-        deadline = None
+    def receive(self, limit=MAX_EVENT, frame_timeout=2, deadline=None):
         while True:
             if select.select([self.pid_fd], [], [], 0)[0]:
                 raise EOFError("the Omarchy shell exited")
@@ -109,8 +112,7 @@ class Replies:
                 self.pending = bytearray(rest)
                 if len(line) > limit:
                     raise ValueError("menu message exceeds its size limit")
-                message = json.loads(line)
-                return validate_event(message)
+                return bytes(line)
             if len(self.pending) > limit:
                 raise ValueError("menu message exceeds its size limit")
             if self.pending and deadline is None:
@@ -159,27 +161,156 @@ def shell_identity():
         executable = shutil.which("qs")
         if not executable or not os.path.samefile(f"/proc/{pid}/exe", executable):
             raise ValueError("IPC endpoint is not a Quickshell process")
+        check_shell_config(pid, config)
         if select.select([pid_fd], [], [], 0)[0]:
             raise EOFError("the Omarchy shell exited")
-        yield pid, pid_fd
+        yield pid, pid_fd, connection
 
 
-def accept_shell(listener, pid, pid_fd, timeout=START_TIMEOUT):
+def check_shell_config(pid, config):
+    # Instance metadata is writable by the same user. Check the actual process
+    # launch as well, so another qs running unrelated QML cannot receive the key
+    # merely by replacing registry entries. Omarchy launches qs with -p.
+    with open(f"/proc/{pid}/cmdline", "rb") as source:
+        raw = source.read(65537)
+    if len(raw) > 65536 or not raw.endswith(b"\0"):
+        raise ValueError("invalid shell process arguments")
+    args = [os.fsdecode(arg) for arg in raw[:-1].split(b"\0")][1:]
+    path = None
+    while args:
+        argument = args.pop(0)
+        if argument in {"-n", "--no-duplicate", "-d", "--daemonize", "--no-color",
+                        "--log-times", "-v", "-vv", "--verbose"}:
+            continue
+        if argument == "--log-rules" and args:
+            args.pop(0)
+            continue
+        if argument.startswith("--log-rules="):
+            continue
+        if argument in {"-p", "--path"} and args:
+            candidate = args.pop(0)
+        elif argument.startswith("--path="):
+            candidate = argument[len("--path="):]
+        else:
+            raise ValueError("unsupported Omarchy shell launch arguments")
+        if path is not None or not os.path.isabs(candidate):
+            raise ValueError("shell must have one explicit absolute config path")
+        path = candidate
+    if path is None:
+        raise ValueError("shell must have one explicit absolute config path")
+    # Do not resolve aliases here: an attacker could launch their own QML via a
+    # symlink, then repoint that symlink to the expected file after startup.
+    expected = os.path.abspath(config)
+    if path not in {expected, os.path.join(expected, "shell.qml")}:
+        raise ValueError("Quickshell process is running a different config")
+
+
+def qstring(value):
+    data = value.encode("utf-16-be")
+    return struct.pack("!I", len(data)) + data
+
+
+def summon_private(connection, token, secret):
+    # Quickshell 0.3.x StringCallCommand: variant tag 3, QString target/function,
+    # QVector<QString> arguments. Qt's QDataStream uses big-endian lengths and
+    # UTF-16 strings. Send directly on the verified IPC socket, never via argv.
+    # Source: quickshell/src/{ipc/ipccommand.hpp,io/ipccomm.cpp}.
+    payload = json.dumps({"token": token, "secret": secret})
+    command = (b"\x03" + qstring("shell") + qstring("summon") + struct.pack("!I", 2)
+               + qstring(PLUGIN_ID) + qstring(payload))
+    deadline = time.monotonic() + START_TIMEOUT
+    connection.settimeout(START_TIMEOUT)
+    connection.sendall(command)
+
+    def exact(size):
+        result = bytearray()
+        while len(result) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("private shell IPC timed out")
+            connection.settimeout(remaining)
+            chunk = connection.recv(size - len(result))
+            if not chunk:
+                raise EOFError("private shell IPC closed")
+            result.extend(chunk)
+        return bytes(result)
+
+    # Completed response is variant 5, followed by isVoid and a QString.
+    if exact(1) != b"\x05" or exact(1) != b"\x00":
+        raise ValueError("unsupported or unsuccessful private shell IPC response")
+    length = struct.unpack("!I", exact(4))[0]
+    if length != 4 or exact(length) != "ok".encode("utf-16-be"):
+        raise ValueError("the Omarchy shell did not open the menu")
+
+
+def hello_mac(key, token, role, nonce):
+    return hmac.digest(key, (PREFIX + token + "\n" + role + "-hello\n" + nonce).encode("ascii"), "sha256").hex()
+
+
+def frame_mac(key, token, nonce, direction, sequence, payload):
+    data = PREFIX + token + "\n" + nonce + "\n" + direction + "\n" + str(sequence) + "\n" + payload
+    return hmac.digest(key, data.encode("ascii"), "sha256").hex()
+
+
+class Channel:
+    def __init__(self, connection, frames, key, token, nonce):
+        self.connection, self.frames = connection, frames
+        self.key, self.token, self.nonce = key, token, nonce
+        self.send_seq = self.receive_seq = 0
+
+    def send(self, message):
+        payload = json.dumps(message, ensure_ascii=True, separators=(",", ":"))
+        mac = frame_mac(self.key, self.token, self.nonce, "request", self.send_seq, payload)
+        self.connection.sendall(f"{self.send_seq}:{mac}:{payload}\n".encode("ascii"))
+        self.send_seq += 1
+
+    def receive(self):
+        line = self.frames.receive().decode("ascii")
+        fields = re.fullmatch(r"(0|[1-9][0-9]{0,9}):([0-9a-f]{64}):(.*)", line)
+        if not fields or int(fields[1]) != self.receive_seq:
+            raise ValueError("invalid menu reply sequence")
+        expected = frame_mac(self.key, self.token, self.nonce, "reply", self.receive_seq, fields[3])
+        if not hmac.compare_digest(fields[2], expected):
+            raise ValueError("menu reply authentication failed")
+        event = validate_event(json.loads(fields[3]))
+        self.receive_seq += 1
+        return event
+
+
+def authenticate(connection, pid_fd, key, token, deadline):
+    nonce = secrets.token_hex(32)
+    connection.settimeout(max(0.001, deadline - time.monotonic()))
+    send(connection, {"type": "challenge", "nonce": nonce,
+                      "mac": hello_mac(key, token, "server", nonce)})
+    frames = Frames(connection, pid_fd)
+    proof = json.loads(frames.receive(limit=512, deadline=deadline))
+    expected = hello_mac(key, token, "client", nonce)
+    if (not isinstance(proof, dict) or set(proof) != {"type", "mac"} or proof["type"] != "proof"
+            or not isinstance(proof["mac"], str) or not re.fullmatch(r"[0-9a-f]{64}", proof["mac"])
+            or not hmac.compare_digest(proof["mac"], expected)):
+        raise ValueError("menu connection authentication failed")
+    connection.settimeout(None)
+    return Channel(connection, frames, key, token, nonce)
+
+
+def accept_shell(listener, pid, pid_fd, key, token, timeout=START_TIMEOUT):
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("the Omarchy shell did not connect")
+            raise TimeoutError("the Omarchy shell did not authenticate")
         ready, _, _ = select.select([listener, pid_fd], [], [], remaining)
         if pid_fd in ready:
             raise EOFError("the Omarchy shell exited")
         if listener not in ready:
-            raise TimeoutError("the Omarchy shell did not connect")
+            raise TimeoutError("the Omarchy shell did not authenticate")
         connection, _ = listener.accept()
         try:
             if peer_pid(connection) == pid:
-                return connection
-        except ValueError:
+                channel = authenticate(connection, pid_fd, key, token,
+                                       min(deadline, time.monotonic() + AUTH_TIMEOUT))
+                return channel
+        except (ValueError, OSError, EOFError, RecursionError):
             pass
         connection.close()
 
@@ -234,12 +365,14 @@ def call(options):
     if len(raw) > MAX_BYTES:
         raise ValueError("menu input exceeds 2 MiB")
     items = validate_items(raw.decode("utf-8"))
-    with private_base(create=True) as base_fd, shell_identity() as (shell_pid, pid_fd):
+    with private_base(create=True) as base_fd, shell_identity() as (shell_pid, pid_fd, ipc):
         try:
             fcntl.flock(base_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError("another menu is already active") from None
         token = secrets.token_hex(16)
+        secret = secrets.token_hex(32)
+        key = bytes.fromhex(secret)
         os.mkdir(token, 0o700, dir_fd=base_fd)
         request_fd = os.open(token, DIR_FLAGS, dir_fd=base_fd)
         try:
@@ -249,24 +382,19 @@ def call(options):
                 os.chmod("socket", 0o600, dir_fd=request_fd, follow_symlinks=False)
                 listener.listen(64)
                 listener.settimeout(START_TIMEOUT)
-                result = subprocess.run(
-                    ["omarchy-shell", "shell", "summon", PLUGIN_ID, json.dumps({"token": token})],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=START_TIMEOUT,
-                    env={**os.environ, "OMARCHY_SHELL_IPC_TIMEOUT": "10s"}, check=False,
-                )
-                if result.returncode or result.stdout.strip() != b"ok":
-                    raise ValueError("the Omarchy shell did not open the menu")
-                with accept_shell(listener, shell_pid, pid_fd) as connection:
+                summon_private(ipc, token, secret)
+                secret = None
+                channel = accept_shell(listener, shell_pid, pid_fd, key, token)
+                with channel.connection as connection:
                     connection.settimeout(START_TIMEOUT)
-                    send(connection, {"type": "begin", "token": token, "options": options})
+                    channel.send({"type": "begin", "token": token, "options": options})
                     for offset in range(0, len(items), 4096):
-                        send(connection, {"type": "items", "text": items[offset:offset + 4096]})
-                    send(connection, {"type": "end"})
+                        channel.send({"type": "items", "text": items[offset:offset + 4096]})
+                    channel.send({"type": "end"})
                     connection.settimeout(None)
-                    replies = Replies(connection, pid_fd)
                     printed = 0
                     while True:
-                        event = replies.receive()
+                        event = channel.receive()
                         if event["type"] == "exit":
                             return event["status"]
                         data = (event["text"] + "\n").encode("utf-8")

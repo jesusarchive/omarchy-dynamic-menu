@@ -8,7 +8,7 @@ It reads a list from standard input and writes your selection to standard output
 
 ## Requirements
 
-Omarchy Quattro with shell plugin support, Bash, Python 3, `jq`, and `wl-clipboard`. Omarchy includes these dependencies.
+Omarchy Quattro with shell plugin support, Bash, Python 3, `jq`, and `wl-clipboard`. Omarchy includes these dependencies. Tested with Quickshell 0.3.1.
 
 ## Installation
 

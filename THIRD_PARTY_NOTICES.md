@@ -36,3 +36,12 @@ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+## js-sha256
+
+`vendor/Sha256.js` contains [js-sha256 0.11.1](https://github.com/emn178/js-sha256/tree/v0.11.1),
+by Chen, Yi-Cyuan, under the [MIT license](vendor/js-sha256-LICENSE.txt).
+The upstream function wrapper assigns and returns `sha256` for QML imports;
+the SHA-256 and HMAC implementations are unchanged.
+
+Upstream source SHA-256: `2db6c8e554fbee14672368a0d7551a8ddd841ee96c91526eb7987a0179cfc717`.

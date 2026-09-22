@@ -4,6 +4,9 @@ const fs = require("node:fs")
 const path = require("node:path")
 const vm = require("node:vm")
 const Engine = require("../Engine.js")
+const Auth = require("../Auth.js")
+const Sha256 = { sha256: require("../vendor/Sha256.js") }
+const secret = "c".repeat(64)
 const Protocol = require("../Protocol.js")
 const { match } = require("../Match.js")
 
@@ -13,20 +16,22 @@ function context() {
   const writes = []
   const root = { activeToken: "", opened: false, menu: null, revision: 0, transportPath: "/plugin/bin/menu-transport.py" }
   const timer = () => ({ running: false, restart() { this.running = true }, stop() { this.running = false } })
-  const ctx = vm.createContext({ root, Engine, Protocol, writes,
+  const ctx = vm.createContext({ root, Engine, Protocol, Auth, Sha256, writes,
     Quickshell: { env: () => "/run/user/test" },
-    transport: { connected: false, flush() {}, destroy() { this.destroyed = true }, write: value => writes.push(JSON.parse(value)) },
+    transport: { connected: false, flush() {}, destroy() { this.destroyed = true }, write: value => writes.push(JSON.parse(value.replace(/^\d+:[0-9a-f]{64}:/, ""))) },
     pasteProc: { running: false, requestToken: "" },
     startupTimer: timer(), shutdownTimer: timer(),
     Style: { font: { menuFamily: "monospace", body: 14 } },
     Qt: { font: value => value }
   })
   ctx.transportComponent = { createObject: () => ctx.transport }
+  ctx.logic = {}
   for (const name of ["open", "printLine", "finish", "hideMenu", "transportStopped", "parseFont"]) {
-    const start = qml.indexOf("  function " + name + "(")
-    const end = qml.indexOf("\n  }", start) + 4
+    const start = qml.indexOf("    function " + name + "(", qml.indexOf("    id: logic"))
+    const end = qml.indexOf("\n    }", start) + 6
     vm.runInContext(qml.slice(start, end), ctx)
     root[name] = ctx[name]
+    ctx.logic[name] = ctx[name]
   }
   const start = qml.indexOf("      onStreamFinished: {", qml.indexOf("id: pasteProc"))
   const end = qml.indexOf("\n      }", start)
@@ -35,11 +40,22 @@ function context() {
   return ctx
 }
 
+function authenticate(ctx) {
+  const state = ctx.root.authentication
+  const nonce = "d".repeat(64)
+  Auth.feed(state, JSON.stringify({type: "challenge", nonce,
+    mac: Auth.helloMac(state, "server", nonce)}) + "\n", () => {}, () => {})
+}
+
 test("QML rejects malformed payloads and legacy arbitrary paths without side effects", () => {
   const ctx = context()
   for (const payload of ["", "null", "[]", "1", "{", '{}', '{"token":"../../etc/passwd"}',
     JSON.stringify({ token: "a".repeat(32), doneFile: "/arbitrary/file" }),
-    JSON.stringify({ token: "a".repeat(32) + "\n" })]) {
+    JSON.stringify({ token: "a".repeat(32) + "\n", secret }),
+    JSON.stringify({ token: "../" + "a".repeat(32), secret }),
+    JSON.stringify({ token: "a".repeat(32) }),
+    JSON.stringify({ token: "a".repeat(32), secret: "a".repeat(63) }),
+    JSON.stringify({ token: "a".repeat(32), secret: "a".repeat(64) + "\n" })]) {
     ctx.root.open(payload)
     assert.equal(ctx.root.activeToken, "")
     assert.equal(ctx.transport.connected, false)
@@ -47,21 +63,22 @@ test("QML rejects malformed payloads and legacy arbitrary paths without side eff
   }
 })
 
-test("QML accepts only a token and cannot replace an active request", () => {
+test("QML requires private bootstrap fields and cannot replace an active request", () => {
   const ctx = context()
   const first = "a".repeat(32)
-  ctx.root.open(JSON.stringify({ token: first }))
+  ctx.root.open(JSON.stringify({ token: first, secret }))
   assert.equal(ctx.root.activeToken, first)
   assert.equal(ctx.transport.path, "/run/user/test/omarchy-dynamic-menu/" + first + "/socket")
   assert.equal(ctx.transport.connected, true)
-  ctx.root.open(JSON.stringify({ token: "b".repeat(32) }))
+  ctx.root.open(JSON.stringify({ token: "b".repeat(32), secret }))
   assert.equal(ctx.root.activeToken, first)
   assert.equal(ctx.writes.length, 0)
 })
 
 test("QML sends literal output before exit and hide recursion cannot send twice", () => {
   const ctx = context()
-  ctx.root.open(JSON.stringify({ token: "a".repeat(32) }))
+  ctx.root.open(JSON.stringify({ token: "a".repeat(32), secret }))
+  authenticate(ctx)
   ctx.root.shell = { hide: () => ctx.root.finish(1) }
   ctx.root.printLine("quotes ' \" $()")
   ctx.root.finish(0)
@@ -146,7 +163,8 @@ test("repeated query tokens scan each item once and case folding is not repeated
 
 test("QML bounds queued output and destroys a stalled socket at its shutdown deadline", () => {
   const ctx = context()
-  ctx.root.open(JSON.stringify({ token: "a".repeat(32) }))
+  ctx.root.open(JSON.stringify({ token: "a".repeat(32), secret }))
+  authenticate(ctx)
   ctx.root.printedBytes = 2 * 1024 * 1024 - 2
   ctx.root.printLine("x")
   ctx.root.printLine("overflow")
@@ -160,7 +178,7 @@ test("QML bounds queued output and destroys a stalled socket at its shutdown dea
 
 test("synchronous socket disconnect cannot leave a timer that closes the next menu", () => {
   const ctx = context()
-  ctx.root.open(JSON.stringify({ token: "a".repeat(32) }))
+  ctx.root.open(JSON.stringify({ token: "a".repeat(32), secret }))
   Object.defineProperty(ctx.transport, "connected", {
     set(value) { if (!value) ctx.root.transportStopped() },
     get() { return false }
@@ -168,7 +186,14 @@ test("synchronous socket disconnect cannot leave a timer that closes the next me
   ctx.root.finish(0)
   assert.equal(ctx.shutdownTimer.running, false)
   assert.equal(ctx.root.transport, null)
-  ctx.root.open(JSON.stringify({ token: "b".repeat(32) }))
+  ctx.root.open(JSON.stringify({ token: "b".repeat(32), secret }))
   assert.equal(ctx.root.activeToken, "b".repeat(32))
   assert.equal(ctx.shutdownTimer.running, false)
+})
+
+
+test("the host dispatcher can reach only open and close, never internal output methods", () => {
+  const publicMethods = [...qml.matchAll(/^  function (\w+)\(/gm)].map(match => match[1])
+  assert.deepEqual(publicMethods, ["open", "close"])
+  assert.ok(qml.includes("logic.printLine(result.output)"))
 })
