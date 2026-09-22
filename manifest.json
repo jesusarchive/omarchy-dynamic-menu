@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "jesusarchive",
   "license": "MIT",
-  "description": "A dmenu-compatible launcher for the Omarchy shell.",
+  "description": "A dmenu port for the Omarchy shell.",
   "kinds": ["overlay"],
   "keepLoaded": true,
   "entryPoints": {
