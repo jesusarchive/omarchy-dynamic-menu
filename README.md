@@ -4,7 +4,7 @@ A [dmenu](https://tools.suckless.org/dmenu/) port for the Omarchy shell.
 
 It reads a list from standard input and writes your selection to standard output.
 
-![dmenu_run on an empty Omarchy workspace](preview.png?raw=true&v=2)
+![dmenu_run on an empty Omarchy workspace](preview.png?raw=true&v=3)
 
 ## Requirements
 
