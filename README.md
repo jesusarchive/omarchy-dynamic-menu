@@ -1,6 +1,6 @@
 # Dynamic Menu for Omarchy
 
-Dynamic Menu is a port of [suckless dmenu](https://tools.suckless.org/dmenu/) for the [Omarchy](https://omarchy.org) shell.
+A dmenu port for the Omarchy shell.
 
 It supports dmenu 5.4's matching, keyboard controls, paging, vertical lists, fonts, colors, and command-line options.
 
