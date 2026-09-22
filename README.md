@@ -42,6 +42,8 @@ printf 'Lock\nSuspend\nLog out\n' | dmenu -p 'Session:'
 
 Press Enter to select or Escape to cancel. Use `-i` for case-insensitive matching and `-l 10` for a vertical list.
 
+Menus accept up to 20,000 items and 2 MiB of input, with at most 8 KiB per item. Search supports up to 64 distinct words; Shift+Enter submits your typed text.
+
 ### Create your own menu
 
 This session menu lets you lock, suspend, log out, reboot, or shut down. Save it as `~/session-menu.sh` and run it with `bash ~/session-menu.sh`. It uses the plugin's full path, so command links are not needed.

@@ -7,6 +7,7 @@
 
 var WORD_DELIMITERS = " "
 var MAX_INPUT = 8192
+var MAX_VISIBLE = 50
 
 // readstdin(): one item per line, with the newline stripped. A final line
 // without a newline is still an item; empty lines are items too.
@@ -31,7 +32,7 @@ function create(items, options) {
     next: -1,
     prev: -1,
     // readstdin(): lines = MIN(lines, number of items)
-    lines: Math.max(0, Math.min(opts.lines || 0, items.length)),
+    lines: Math.max(0, Math.min(opts.lines || 0, items.length, MAX_VISIBLE)),
     caseInsensitive: opts.caseInsensitive === true,
     prompt: String(opts.prompt || ""),
     textw: opts.textw || function(str) { return str.length },
@@ -48,7 +49,7 @@ function item(state, position) {
 }
 
 function promptw(state) {
-  return state.prompt ? state.textw(state.prompt) - Math.floor(state.lrpad / 4) : 0
+  return state.prompt ? Math.max(0, Math.min(state.mw / 3, state.textw(state.prompt) - Math.floor(state.lrpad / 4))) : 0
 }
 
 function inputw(state) {
@@ -56,7 +57,7 @@ function inputw(state) {
 }
 
 function textwClamp(state, str, n) {
-  return Math.min(state.textw(str), n)
+  return Math.max(0, Math.min(state.textw(str), n))
 }
 
 function calcoffsets(state) {
@@ -70,16 +71,20 @@ function calcoffsets(state) {
     ? state.lines
     : state.mw - (promptw(state) + inputw(state) + state.textw("<") + state.textw(">"))
 
+  n = Math.max(1, n)
+
   // which items begin the next page and the previous page
   var i = 0
   for (state.next = state.curr; state.next < count; state.next++)
-    if ((i += state.lines > 0 ? 1 : textwClamp(state, item(state, state.next), n)) > n)
+    if (state.next - state.curr >= MAX_VISIBLE
+        || (i += state.lines > 0 ? 1 : Math.max(1, textwClamp(state, item(state, state.next), n))) > n)
       break
   if (state.next >= count) state.next = -1
 
   i = 0
   for (state.prev = state.curr; state.prev > 0; state.prev--)
-    if ((i += state.lines > 0 ? 1 : textwClamp(state, item(state, state.prev - 1), n)) > n)
+    if (state.curr - state.prev >= MAX_VISIBLE
+        || (i += state.lines > 0 ? 1 : Math.max(1, textwClamp(state, item(state, state.prev - 1), n))) > n)
       break
 }
 

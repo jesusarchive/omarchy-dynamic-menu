@@ -1,5 +1,6 @@
 """Security and integration tests; all sockets and fake shell processes are isolated."""
 import importlib.util
+import contextlib
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -55,36 +57,6 @@ class TransportTests(unittest.TestCase):
         listener.settimeout(3)
         return listener
 
-    def start_server(self, listener, code=None):
-        command = [sys.executable, "-I", str(HELPER), "serve", self.token]
-        if code:
-            command = [sys.executable, "-I", "-B", "-c", code]
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, env=self.env)
-        def cleanup():
-            if process.poll() is None:
-                process.kill()
-            process.communicate(timeout=3)
-        self.addCleanup(cleanup)
-        connection, _ = listener.accept()
-        self.addCleanup(connection.close)
-        connection.settimeout(3)
-        self.assertEqual(t.receive(connection, 256), {"type": "hello", "token": self.token})
-        return process, connection
-
-    def ready(self, process, connection, text="one\ntwo\n"):
-        t.send(connection, {"type": "items", "token": self.token, "options": {}, "text": text})
-        message = json.loads(process.stdout.readline())
-        self.assertEqual(message["text"], text)
-        self.assertEqual(message["token"], self.token)
-
-    def test_tokens_cannot_supply_paths(self):
-        for token in ("", "../" + "a" * 32, "/tmp/owned", "a" * 33, "A" * 32, "a" * 32 + "\n"):
-            with self.subTest(token=token):
-                result = self.cli("serve", token)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b"invalid request token", result.stderr)
-
     def test_runtime_must_be_private(self):
         self.runtime.chmod(0o755)
         with self.assertRaisesRegex(ValueError, "0700"):
@@ -100,84 +72,17 @@ class TransportTests(unittest.TestCase):
     def test_runtime_symlink_is_rejected(self):
         link = self.directory / "alias"
         link.symlink_to(self.runtime, target_is_directory=True)
-        self.env["XDG_RUNTIME_DIR"] = str(link)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
+        with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(link)}):
+            with self.assertRaises(OSError):
+                t.open_runtime()
 
-    def test_symlinked_base_and_request_are_rejected(self):
-        base = self.runtime / t.BASE
+    def test_symlinked_base_is_rejected(self):
         outside = self.directory / "outside"
         outside.mkdir(mode=0o700)
-        base.symlink_to(outside, target_is_directory=True)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-        base.unlink()
-        base.mkdir(mode=0o700)
-        (base / self.token).symlink_to(outside, target_is_directory=True)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-
-    def test_files_fifos_and_socket_symlinks_are_rejected_without_blocking(self):
-        endpoint = self.endpoint()
-        endpoint.write_text("do not change")
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-        self.assertEqual(endpoint.read_text(), "do not change")
-        endpoint.unlink()
-        os.mkfifo(endpoint, mode=0o600)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-        endpoint.unlink()
-        other = self.directory / "other-socket"
-        self.listener(other)
-        endpoint.symlink_to(other)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-
-    def test_public_socket_is_rejected(self):
-        endpoint = self.endpoint()
-        self.listener(endpoint)
-        endpoint.chmod(0o666)
-        self.assertNotEqual(self.cli("serve", self.token).returncode, 0)
-
-    def test_socket_is_pinned_across_path_replacement(self):
-        endpoint = self.endpoint()
-        listener = self.listener(endpoint)
-        outside = self.directory / "outside-socket"
-        self.listener(outside)
-        code = f'''
-import importlib.util, os, socket
-spec = importlib.util.spec_from_file_location("transport", {str(HELPER)!r})
-t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
-original = socket.socket
-class SwappedSocket(original):
-    def connect(self, path):
-        os.rename({str(endpoint)!r}, {str(endpoint) + '.old'!r})
-        os.symlink({str(outside)!r}, {str(endpoint)!r})
-        super().connect(path)
-socket.socket = SwappedSocket
-t.serve({self.token!r})
-'''
-        process, connection = self.start_server(listener, code)
-        self.ready(process, connection)
-        connection.close()
-        self.assertEqual(process.wait(timeout=3), 0)
-
-    def test_output_is_literal_ordered_and_cancel_retains_prior_output(self):
-        process, connection = self.start_server(self.listener(self.endpoint()))
-        self.ready(process, connection)
-        events = [{"type": "output", "text": "a 'quoted' $(command); value"},
-                  {"type": "output", "text": "second"}, {"type": "exit", "status": 1}]
-        process.stdin.write(b"".join(t.encode(event) + b"\n" for event in events))
-        process.stdin.flush()
-        self.assertEqual([t.receive(connection, t.MAX_EVENT) for _ in events], events)
-        self.assertEqual(process.wait(timeout=3), 0)
-
-    def test_disconnected_caller_terminates_helper(self):
-        process, connection = self.start_server(self.listener(self.endpoint()))
-        self.ready(process, connection)
-        connection.close()
-        self.assertEqual(process.wait(timeout=3), 0)
-
-    def test_oversized_frame_is_rejected_before_reading_body(self):
-        process, connection = self.start_server(self.listener(self.endpoint()))
-        connection.sendall(struct.pack("!I", t.MAX_REQUEST + 1))
-        self.assertEqual(process.wait(timeout=3), 1)
-        self.assertIn(b"size limit", process.stderr.read())
+        (self.runtime / t.BASE).symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(OSError):
+            with t.private_base(create=True):
+                pass
 
     def test_item_limits_are_enforced_by_shell_helper(self):
         invalid = ("a" * (t.MAX_TEXT + 1), "\n" * (t.MAX_ITEMS + 1), "\0", "a" * (t.MAX_BYTES + 1))
@@ -195,102 +100,158 @@ t.serve({self.token!r})
             with self.assertRaises(ValueError):
                 t.validate_event(event)
 
-    def test_handshake_has_total_deadline(self):
+    def pidfd(self, pid=None):
+        fd = os.pidfd_open(pid or os.getpid())
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def test_forged_bootstrap_socket_cannot_claim_another_process(self):
+        endpoint = self.runtime / "quickshell/by-id/test/ipc.sock"
+        endpoint.parent.mkdir(parents=True)
+        self.listener(endpoint)
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        try:
+            result = subprocess.CompletedProcess([], 0, json.dumps([{"id": "test", "pid": process.pid}]).encode())
+            with patch.object(t.subprocess, "run", return_value=result):
+                with self.assertRaisesRegex(ValueError, "identity changed"):
+                    with t.shell_identity():
+                        self.fail("accepted forged shell identity")
+        finally:
+            process.terminate()
+            process.wait(timeout=2)
+
+    def test_forged_bootstrap_metadata_cannot_authorize_non_quickshell_process(self):
+        endpoint = self.runtime / "quickshell/by-id/test/ipc.sock"
+        endpoint.parent.mkdir(parents=True)
+        self.listener(endpoint)
+        result = subprocess.CompletedProcess([], 0, json.dumps([{"id": "test", "pid": os.getpid()}]).encode())
+        with patch.object(t.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "not a Quickshell"):
+                with t.shell_identity():
+                    self.fail("accepted a Python impostor")
+
+    def test_bad_or_ambiguous_bootstrap_metadata_fails_closed(self):
+        for instances in ([], [None], [{"id": "../escape", "pid": 1}], [{"id": "x", "pid": True}],
+                          [{"id": "a", "pid": 1}, {"id": "b", "pid": 2}]):
+            result = subprocess.CompletedProcess([], 0, json.dumps(instances).encode())
+            with patch.object(t.subprocess, "run", return_value=result):
+                with self.assertRaises(ValueError):
+                    with t.shell_identity():
+                        self.fail("accepted invalid shell metadata")
+
+    def test_peer_uid_must_match_even_when_pid_matches(self):
+        left, right = socket.socketpair()
+        with left, right, patch.object(t.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(ValueError, "different user"):
+                t.peer_pid(left)
+
+    def test_same_uid_impostor_racing_real_peer_gets_no_data(self):
+        endpoint = self.endpoint()
+        listener = self.listener(endpoint)
+        attacker = subprocess.Popen([sys.executable, "-c", '''
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b'{"type":"output","text":"INJECTED"}\\n')
+print("connected", flush=True)
+try: data = s.recv(65536)
+except ConnectionResetError: data = b""
+assert not data, data
+''', str(endpoint)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # A separate process has the same UID and knows the entire request ID.
+        self.assertEqual(attacker.stdout.readline(), b"connected\n")
+        legitimate = socket.socket(socket.AF_UNIX)
+        self.addCleanup(legitimate.close)
+        legitimate.connect(str(endpoint))
+        with t.accept_shell(listener, os.getpid(), self.pidfd(), timeout=1) as peer:
+            self.assertEqual(t.peer_pid(peer), os.getpid())
+            t.send(peer, {"type": "items", "text": "private input"})
+            self.assertIn(b"private input", legitimate.recv(65536))
+        output, error = attacker.communicate(timeout=2)
+        self.assertEqual(attacker.returncode, 0, error)
+        self.assertEqual(output, b"")
+
+    def test_rejected_clients_do_not_extend_accept_deadline(self):
+        listener = self.listener(self.endpoint())
+        started = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            t.accept_shell(listener, os.getpid(), self.pidfd(), timeout=0.05)
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def replies(self):
         left, right = socket.socketpair()
         self.addCleanup(left.close)
         self.addCleanup(right.close)
-        right.sendall(struct.pack("!I", 10))
+        return t.Replies(left, self.pidfd()), right
+
+    def test_reply_frames_are_literal_ordered_and_bounded(self):
+        reader, writer = self.replies()
+        events = [{"type": "output", "text": "a 'quoted' $(command); value 🐈"},
+                  {"type": "output", "text": "second"}, {"type": "exit", "status": 1}]
+        for event in events:
+            t.send(writer, event)
+        self.assertEqual([reader.receive() for _ in events], events)
+        writer.sendall(b"x" * 101)
+        with self.assertRaisesRegex(ValueError, "size limit"):
+            reader.receive(limit=100)
+
+    def test_partial_reply_has_total_deadline_but_idle_user_does_not(self):
+        reader, writer = self.replies()
+        def delayed():
+            time.sleep(0.1)
+            writer.sendall(b'{"type":')
+        thread = threading.Thread(target=delayed)
+        thread.start()
         started = time.monotonic()
         with self.assertRaises(TimeoutError):
-            t.receive(left, 100, started + 0.05)
+            reader.receive(frame_timeout=0.05)
+        thread.join()
+        self.assertGreater(time.monotonic() - started, 0.1)
         self.assertLess(time.monotonic() - started, 0.5)
 
-    def install_fake_shell(self, mode="accept"):
-        fakebin = self.directory / "bin"
-        fakebin.mkdir()
-        command = fakebin / "omarchy-shell"
-        command.write_text(f'''#!{sys.executable}
-import json, os, pathlib, subprocess, sys, time
-helper = {str(HELPER)!r}
-directory = pathlib.Path({str(self.directory)!r})
-mode = {mode!r}
-if sys.argv[1] != "--controller":
-    token = json.loads(sys.argv[-1])["token"]
-    subprocess.Popen([sys.executable, __file__, "--controller", token], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    print("ok")
-else:
-    process = subprocess.Popen([sys.executable, "-I", helper, "serve", sys.argv[2]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    try:
-        message = json.loads(process.stdout.readline())
-        (directory / "ready").write_text(json.dumps(message))
-        if mode == "hold":
-            deadline = time.monotonic() + 5
-            while not (directory / "release").exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
-        events = [{{"type": "output", "text": "first"}}, {{"type": "output", "text": "second"}}, {{"type": "exit", "status": 0}}]
-        process.stdin.write(b"".join((json.dumps(event) + "\\n").encode() for event in events))
-        process.stdin.flush()
-        process.wait(timeout=3)
-    finally:
-        if process.poll() is None: process.kill()
-        process.wait()
-''')
-        command.chmod(0o700)
-        self.env["PATH"] = str(fakebin) + os.pathsep + self.env["PATH"]
+    def test_dead_shell_is_rejected_even_with_buffered_valid_output(self):
+        process = subprocess.Popen([sys.executable, "-c", "pass"])
+        fd = self.pidfd(process.pid)
+        process.wait(timeout=2)
+        left, right = socket.socketpair()
+        with left, right:
+            reader = t.Replies(left, fd)
+            reader.pending = bytearray(b'{"type":"output","text":"stale"}\n')
+            with self.assertRaises(EOFError):
+                reader.receive()
 
-    def test_wrapper_end_to_end_streams_results_and_cleans_socket(self):
-        self.install_fake_shell()
-        result = subprocess.run([str(ROOT / "bin/dmenu"), "-p", "Pick 'one'", "-l", "3"],
-                                input=b"alpha\nbeta\n", env=self.env, capture_output=True, timeout=8)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, b"first\nsecond\n")
-        message = json.loads((self.directory / "ready").read_text())
-        self.assertEqual(message["text"], "alpha\nbeta\n")
-        self.assertEqual(message["options"]["prompt"], "Pick 'one'")
+    def test_caller_round_trip_cleans_endpoint_and_preserves_options(self):
+        output = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        stdin = io.TextIOWrapper(io.BytesIO(b"alpha\nbeta\n"), encoding="utf-8")
+        ready = []
+        threads = []
+        @contextlib.contextmanager
+        def identity():
+            yield os.getpid(), self.pidfd()
+        def summon(command, **kwargs):
+            token = json.loads(command[-1])["token"]
+            def client():
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.connect(str(self.runtime / t.BASE / token / "socket"))
+                    with connection.makefile("rb") as stream:
+                        while True:
+                            event = json.loads(stream.readline())
+                            ready.append(event)
+                            if event["type"] == "end": break
+                    t.send(connection, {"type": "output", "text": "first"})
+                    t.send(connection, {"type": "output", "text": "second"})
+                    t.send(connection, {"type": "exit", "status": 0})
+            thread = threading.Thread(target=client)
+            thread.start()
+            threads.append(thread)
+            return subprocess.CompletedProcess(command, 0, b"ok\n")
+        with patch.object(t, "shell_identity", identity), patch.object(t.subprocess, "run", summon), \
+                patch.object(t.sys, "stdin", stdin), patch.object(t.sys, "stdout", output):
+            self.assertEqual(t.call({"prompt": "Pick 'one'", "lines": 3}), 0)
+        for thread in threads: thread.join(timeout=2)
+        self.assertEqual(output.buffer.getvalue(), b"first\nsecond\n")
+        self.assertEqual(ready[0]["options"]["prompt"], "Pick 'one'")
+        self.assertEqual(ready[1]["text"], "alpha\nbeta\n")
         self.assertEqual(list((self.runtime / t.BASE).iterdir()), [])
-
-    def test_concurrent_wrapper_cannot_replace_active_request(self):
-        self.install_fake_shell("hold")
-        first = subprocess.Popen([sys.executable, "-I", str(HELPER), "call", "{}"],
-                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
-        first.stdin.close()
-        first.stdin = None
-        try:
-            deadline = time.monotonic() + 4
-            while not (self.directory / "ready").exists():
-                if time.monotonic() > deadline:
-                    self.fail("first menu did not become ready")
-                time.sleep(0.01)
-            second = self.cli("call", "{}", b"second request")
-            self.assertEqual(second.returncode, 1)
-            self.assertIn(b"already active", second.stderr)
-            (self.directory / "release").touch()
-            output, error = first.communicate(timeout=4)
-            self.assertEqual(first.returncode, 0, error)
-            self.assertEqual(output, b"first\nsecond\n")
-        finally:
-            if first.poll() is None:
-                first.kill()
-                first.communicate()
-
-    def test_wrapper_signal_removes_only_its_request(self):
-        self.install_fake_shell("hold")
-        process = subprocess.Popen([sys.executable, "-I", str(HELPER), "call", "{}"],
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
-        try:
-            deadline = time.monotonic() + 4
-            while not (self.directory / "ready").exists():
-                if time.monotonic() > deadline:
-                    self.fail("menu did not become ready")
-                time.sleep(0.01)
-            process.terminate()
-            process.communicate(timeout=3)
-            self.assertEqual(list((self.runtime / t.BASE).iterdir()), [])
-        finally:
-            (self.directory / "release").touch()
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
 
     def test_cache_rebuild_ignores_predictable_symlinks_and_replaces_cache_link(self):
         cache = self.directory / "cache"
@@ -308,13 +269,6 @@ else:
         self.assertEqual(victim.read_text(), "unchanged")
         self.assertFalse((cache / "dmenu_run").is_symlink())
         self.assertEqual(list(cache.glob(".dmenu_run.*")), [])
-
-    def test_helper_rejects_bad_items_even_when_wrapper_is_bypassed(self):
-        process, connection = self.start_server(self.listener(self.endpoint()))
-        t.send(connection, {"type": "items", "token": self.token, "options": {}, "text": "a" * (t.MAX_TEXT + 1)})
-        self.assertEqual(process.wait(timeout=3), 1)
-        self.assertEqual(process.stdout.read(), b"")
-        self.assertIn(b"8192 bytes", process.stderr.read())
 
     def test_paste_has_size_and_time_limits(self):
         fakebin = self.directory / "clipboard-bin"

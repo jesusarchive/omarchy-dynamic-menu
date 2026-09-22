@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Bounded, per-request Unix socket transport for the QML menu.
 
-The shell receives only a token. It never reads or writes caller-chosen files.
-Directory descriptors pin path components while sockets are opened.
+The request ID is public. Only the process serving the selected Quickshell IPC
+endpoint can return menu results. Linux SO_PEERCRED supplies that identity.
 """
 
 import contextlib
@@ -11,7 +11,9 @@ import json
 import os
 import re
 import secrets
+import select
 import selectors
+import shutil
 import signal
 import socket
 import stat
@@ -22,14 +24,12 @@ import time
 
 PLUGIN_ID = "jesusarchive.dynamic-menu"
 BASE = "omarchy-dynamic-menu"
-TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ITEMS = 20000
 MAX_TEXT = 8192
 MAX_OPTIONS = 4096
 MAX_OUTPUT = MAX_TEXT * 4  # QML input is capped at 8192 UTF-16 code units.
 MAX_EVENT = MAX_OUTPUT * 6 + 256
-MAX_REQUEST = MAX_BYTES * 6 + MAX_OPTIONS + 256
 START_TIMEOUT = 15
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -76,10 +76,12 @@ def private_base(create=False):
         os.close(runtime_fd)
 
 
-def peer_uid(connection):
+def peer_pid(connection):
     credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-    if struct.unpack("3i", credentials)[1] != os.getuid():
+    pid, uid, _ = struct.unpack("3i", credentials)
+    if uid != os.getuid():
         raise ValueError("socket peer belongs to a different user")
+    return pid
 
 
 def encode(message):
@@ -87,32 +89,99 @@ def encode(message):
 
 
 def send(connection, message):
-    data = encode(message)
-    connection.sendall(struct.pack("!I", len(data)) + data)
+    # ASCII JSON avoids splitting UTF-8 characters across QML's raw read chunks.
+    connection.sendall(json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n")
 
 
-def receive(connection, limit, deadline=None):
-    def exact(size):
-        data = bytearray()
-        while len(data) < size:
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("menu handshake timed out")
-                connection.settimeout(remaining)
-            chunk = connection.recv(min(size - len(data), 65536))
+class Replies:
+    def __init__(self, connection, pid_fd):
+        self.connection = connection
+        self.pid_fd = pid_fd
+        self.pending = bytearray()
+
+    def receive(self, limit=MAX_EVENT, frame_timeout=2):
+        deadline = None
+        while True:
+            if select.select([self.pid_fd], [], [], 0)[0]:
+                raise EOFError("the Omarchy shell exited")
+            if b"\n" in self.pending:
+                line, _, rest = self.pending.partition(b"\n")
+                self.pending = bytearray(rest)
+                if len(line) > limit:
+                    raise ValueError("menu message exceeds its size limit")
+                message = json.loads(line)
+                return validate_event(message)
+            if len(self.pending) > limit:
+                raise ValueError("menu message exceeds its size limit")
+            if self.pending and deadline is None:
+                deadline = time.monotonic() + frame_timeout
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            ready, _, _ = select.select([self.connection, self.pid_fd], [], [], remaining)
+            if not ready:
+                raise TimeoutError("incomplete menu reply timed out")
+            if self.pid_fd in ready:
+                raise EOFError("the Omarchy shell exited")
+            chunk = self.connection.recv(65536)
             if not chunk:
                 raise EOFError("menu connection closed")
-            data.extend(chunk)
-        return data
+            self.pending.extend(chunk)
 
-    length = struct.unpack("!I", exact(4))[0]
-    if length > limit:
-        raise ValueError("menu message exceeds its size limit")
-    message = json.loads(exact(length))
-    if not isinstance(message, dict):
-        raise ValueError("menu message must be an object")
-    return message
+
+@contextlib.contextmanager
+def shell_identity():
+    # Use qs for instance selection, then authenticate the selected endpoint with
+    # kernel credentials. Keep a pidfd to reject shell exit and numeric PID reuse.
+    config = os.path.join(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy"), "shell")
+    result = subprocess.run(["qs", "list", "-p", config, "--json"],
+                            capture_output=True, timeout=START_TIMEOUT, check=True)
+    instances = json.loads(result.stdout)
+    if not isinstance(instances, list) or len(instances) != 1:
+        raise ValueError("expected one running Omarchy shell")
+    instance = instances[0]
+    if not isinstance(instance, dict):
+        raise ValueError("invalid Quickshell instance identity")
+    instance_id, pid = instance.get("id"), instance.get("pid")
+    if (not isinstance(instance_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", instance_id)
+            or type(pid) is not int or pid <= 0):
+        raise ValueError("invalid Quickshell instance identity")
+    with contextlib.ExitStack() as stack:
+        pid_fd = os.pidfd_open(pid)
+        stack.callback(os.close, pid_fd)
+        # A substituted IPC socket owned by another same-UID process is not the
+        # selected shell, even when it can forge a normal IPC response.
+        runtime_fd = open_runtime()
+        stack.callback(os.close, runtime_fd)
+        connection = stack.enter_context(socket.socket(socket.AF_UNIX))
+        connection.settimeout(START_TIMEOUT)
+        connection.connect(f"/proc/self/fd/{runtime_fd}/quickshell/by-id/{instance_id}/ipc.sock")
+        if peer_pid(connection) != pid:
+            raise ValueError("Quickshell IPC process identity changed")
+        executable = shutil.which("qs")
+        if not executable or not os.path.samefile(f"/proc/{pid}/exe", executable):
+            raise ValueError("IPC endpoint is not a Quickshell process")
+        if select.select([pid_fd], [], [], 0)[0]:
+            raise EOFError("the Omarchy shell exited")
+        yield pid, pid_fd
+
+
+def accept_shell(listener, pid, pid_fd, timeout=START_TIMEOUT):
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("the Omarchy shell did not connect")
+        ready, _, _ = select.select([listener, pid_fd], [], [], remaining)
+        if pid_fd in ready:
+            raise EOFError("the Omarchy shell exited")
+        if listener not in ready:
+            raise TimeoutError("the Omarchy shell did not connect")
+        connection, _ = listener.accept()
+        try:
+            if peer_pid(connection) == pid:
+                return connection
+        except ValueError:
+            pass
+        connection.close()
 
 
 def validate_options(options):
@@ -165,7 +234,7 @@ def call(options):
     if len(raw) > MAX_BYTES:
         raise ValueError("menu input exceeds 2 MiB")
     items = validate_items(raw.decode("utf-8"))
-    with private_base(create=True) as base_fd:
+    with private_base(create=True) as base_fd, shell_identity() as (shell_pid, pid_fd):
         try:
             fcntl.flock(base_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -178,7 +247,7 @@ def call(options):
             with socket.socket(socket.AF_UNIX) as listener:
                 listener.bind(f"/proc/self/fd/{request_fd}/socket")
                 os.chmod("socket", 0o600, dir_fd=request_fd, follow_symlinks=False)
-                listener.listen(1)
+                listener.listen(64)
                 listener.settimeout(START_TIMEOUT)
                 result = subprocess.run(
                     ["omarchy-shell", "shell", "summon", PLUGIN_ID, json.dumps({"token": token})],
@@ -187,17 +256,17 @@ def call(options):
                 )
                 if result.returncode or result.stdout.strip() != b"ok":
                     raise ValueError("the Omarchy shell did not open the menu")
-                connection, _ = listener.accept()
-                with connection:
-                    peer_uid(connection)
+                with accept_shell(listener, shell_pid, pid_fd) as connection:
                     connection.settimeout(START_TIMEOUT)
-                    if receive(connection, 256, time.monotonic() + START_TIMEOUT) != {"type": "hello", "token": token}:
-                        raise ValueError("incorrect menu request token")
-                    send(connection, {"type": "items", "token": token, "options": options, "text": items})
+                    send(connection, {"type": "begin", "token": token, "options": options})
+                    for offset in range(0, len(items), 4096):
+                        send(connection, {"type": "items", "text": items[offset:offset + 4096]})
+                    send(connection, {"type": "end"})
                     connection.settimeout(None)
+                    replies = Replies(connection, pid_fd)
                     printed = 0
                     while True:
-                        event = validate_event(receive(connection, MAX_EVENT))
+                        event = replies.receive()
                         if event["type"] == "exit":
                             return event["status"]
                         data = (event["text"] + "\n").encode("utf-8")
@@ -213,74 +282,6 @@ def call(options):
             os.close(request_fd)
             with contextlib.suppress(FileNotFoundError, OSError):
                 os.rmdir(token, dir_fd=base_fd)
-
-
-def serve(token):
-    if not TOKEN.fullmatch(token):
-        raise ValueError("invalid request token")
-    with private_base() as base_fd:
-        request_fd = os.open(token, DIR_FLAGS, dir_fd=base_fd)
-        socket_fd = None
-        try:
-            check_private(request_fd)
-            socket_fd = os.open("socket", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=request_fd)
-            info = os.fstat(socket_fd)
-            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
-                raise ValueError("request endpoint must be an owned socket with mode 0600")
-            with socket.socket(socket.AF_UNIX) as connection:
-                connection.settimeout(START_TIMEOUT)
-                connection.connect(f"/proc/self/fd/{socket_fd}")
-                peer_uid(connection)
-                send(connection, {"type": "hello", "token": token})
-                request = receive(connection, MAX_REQUEST, time.monotonic() + START_TIMEOUT)
-                if request.get("type") != "items" or request.get("token") != token:
-                    raise ValueError("incorrect menu request token")
-                options = validate_options(request.get("options"))
-                text = validate_items(request.get("text"))
-                sys.stdout.buffer.write(encode({"type": "ready", "token": token, "options": options, "text": text}) + b"\n")
-                sys.stdout.buffer.flush()
-                connection.settimeout(2)
-                relay(connection)
-        finally:
-            if socket_fd is not None:
-                os.close(socket_fd)
-            os.close(request_fd)
-    return 0
-
-
-def relay(connection):
-    # Watch the caller as well as stdin so a dead caller releases the keyboard.
-    with selectors.DefaultSelector() as selector:
-        selector.register(connection, selectors.EVENT_READ)
-        selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
-        pending = bytearray()
-        printed = 0
-        while True:
-            for key, _ in selector.select():
-                if key.fileobj is connection:
-                    # After the initial request, the caller must send no further data.
-                    if connection.recv(1):
-                        raise ValueError("unexpected data from menu caller")
-                    return
-                chunk = os.read(sys.stdin.fileno(), 65536)
-                if not chunk:
-                    return
-                pending.extend(chunk)
-                while b"\n" in pending:
-                    line, _, rest = pending.partition(b"\n")
-                    pending = bytearray(rest)
-                    if len(line) > MAX_EVENT:
-                        raise ValueError("menu reply exceeds its size limit")
-                    event = validate_event(json.loads(line))
-                    if event["type"] == "output":
-                        printed += len(event["text"].encode("utf-8")) + 1
-                        if printed > MAX_BYTES:
-                            raise ValueError("menu output exceeds 2 MiB")
-                    send(connection, event)
-                    if event["type"] == "exit":
-                        return
-                if len(pending) > MAX_EVENT:
-                    raise ValueError("menu reply exceeds its size limit")
 
 
 def paste(selection):
@@ -324,16 +325,14 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     try:
         if len(sys.argv) != 3:
-            raise ValueError("expected call, serve or paste and one argument")
+            raise ValueError("expected call or paste and one argument")
         action, argument = sys.argv[1:]
         if action == "call":
             return call(json.loads(argument))
-        if action == "serve":
-            return serve(argument)
         if action == "paste":
             return paste(argument)
         raise ValueError("unknown transport action")
-    except (OSError, ValueError, EOFError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, EOFError, RecursionError, subprocess.SubprocessError) as error:
         print(f"dmenu: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

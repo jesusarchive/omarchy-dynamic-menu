@@ -6,6 +6,7 @@ import QtQuick
 import qs.Commons
 import "Match.js" as Match
 import "Engine.js" as Engine
+import "Protocol.js" as Protocol
 
 // Engine.js handles dmenu input, matching, and paging. This file renders the
 // menu and forwards key events.
@@ -29,6 +30,9 @@ Item {
   property var menuScreen: null
   property string activeToken: ""
   property bool finishing: false
+  property var incoming: null
+  property var transport: null
+  property int printedBytes: 0
   readonly property string transportPath: decodeURIComponent(String(Qt.resolvedUrl("bin/menu-transport.py")).replace(/^file:\/\//, ""))
 
   // Colors and font follow the live Omarchy theme, so they track
@@ -94,10 +98,10 @@ Item {
     return Math.ceil(metrics.advanceWidth(str)) + root.lrpad
   }
 
-  // IPC carries only an unguessable request token. The helper obtains the
-  // items and options over that request's socket after validating the endpoint.
+  // IPC carries a public request ID. Connecting inside Quickshell lets the
+  // caller authenticate this socket with the shell's kernel process identity.
   function open(payloadJson) {
-    if (root.activeToken || transport.running) return
+    if (root.activeToken || root.transport) return
     if (typeof payloadJson !== "string" || payloadJson.length > 256) return
     var payload
     try { payload = JSON.parse(payloadJson) } catch (e) { return }
@@ -107,9 +111,18 @@ Item {
 
     root.activeToken = payload.token
     root.finishing = false
-    transport.command = ["python3", "-I", root.transportPath, "serve", payload.token]
-    transport.running = true
+    var runtime = Quickshell.env("XDG_RUNTIME_DIR")
+    if (!runtime || runtime[0] !== "/" || runtime.split("/").indexOf("..") !== -1) {
+      root.activeToken = ""
+      return
+    }
+    root.incoming = Protocol.create(payload.token)
+    root.printedBytes = 0
+    root.transport = transportComponent.createObject(root)
+    transport.path = runtime + "/omarchy-dynamic-menu/" + payload.token + "/socket"
+    shutdownTimer.stop()
     startupTimer.restart()
+    transport.connected = true
   }
 
   function show(message) {
@@ -160,7 +173,13 @@ Item {
 
   function printLine(line) {
     if (!root.activeToken || root.finishing) return
-    transport.write(JSON.stringify({ type: "output", text: line }) + "\n")
+    var bytes
+    try { bytes = Protocol.utf8Length(line) + 1 } catch (e) { root.finish(1); return }
+    if (root.printedBytes + bytes > 2 * 1024 * 1024) { root.finish(1); return }
+    root.printedBytes += bytes
+    var connection = root.transport
+    connection.write(JSON.stringify({ type: "output", text: line }) + "\n")
+    if (root.transport === connection) connection.flush()
   }
 
   function hideMenu() {
@@ -176,10 +195,16 @@ Item {
     if (!root.activeToken || root.finishing) return
     root.finishing = true
     startupTimer.stop()
-    transport.write(JSON.stringify({ type: "exit", status: status === 0 ? 0 : 1 }) + "\n")
-    root.hideMenu()
-    // A non-reading peer must not keep this request alive indefinitely.
+    // Start this before disconnecting: a synchronous disconnect must stop it,
+    // rather than leave an old timer that could close the next request.
     shutdownTimer.restart()
+    root.hideMenu()
+    var connection = root.transport
+    if (!connection) return
+    connection.write(JSON.stringify({ type: "exit", status: status === 0 ? 0 : 1 }) + "\n")
+    if (root.transport !== connection) return
+    connection.flush()
+    if (root.transport === connection) connection.connected = false
   }
 
   function transportStopped() {
@@ -187,6 +212,10 @@ Item {
     shutdownTimer.stop()
     root.finishing = true
     root.activeToken = ""
+    root.incoming = null
+    var previous = root.transport
+    root.transport = null
+    if (previous) previous.destroy()
     root.hideMenu()
   }
 
@@ -194,27 +223,33 @@ Item {
     id: startupTimer
     interval: 20000
     onTriggered: {
-      transport.signal(9)
-      if (!transport.running) root.transportStopped()
+      root.transportStopped()
     }
   }
 
   Timer {
     id: shutdownTimer
     interval: 3000
-    onTriggered: transport.signal(9)
+    onTriggered: root.transportStopped()
   }
 
-  Process {
-    id: transport
-    stdinEnabled: true
-    stdout: SplitParser {
-      onRead: function(data) {
-        try { root.show(JSON.parse(data)) }
-        catch (e) { root.finish(1) }
+  Component {
+    id: transportComponent
+    Socket {
+      id: requestSocket
+      parser: SplitParser {
+        splitMarker: ""
+        onRead: function(data) {
+          if (root.transport !== requestSocket || !root.incoming || root.finishing) return
+          try {
+            var message = Protocol.feed(root.incoming, data)
+            if (message) root.show(message)
+          } catch (e) { root.finish(1) }
+        }
       }
+      onConnectionStateChanged: if (!connected && root.transport === requestSocket) root.transportStopped()
+      onError: if (root.transport === requestSocket) root.transportStopped()
     }
-    onExited: root.transportStopped()
   }
 
   Process {

@@ -4,6 +4,7 @@ const fs = require("node:fs")
 const path = require("node:path")
 const vm = require("node:vm")
 const Engine = require("../Engine.js")
+const Protocol = require("../Protocol.js")
 const { match } = require("../Match.js")
 
 // Execute the actual QML functions with process/window objects replaced by spies.
@@ -11,14 +12,16 @@ const qml = fs.readFileSync(path.join(__dirname, "../DynamicMenu.qml"), "utf8")
 function context() {
   const writes = []
   const root = { activeToken: "", opened: false, menu: null, revision: 0, transportPath: "/plugin/bin/menu-transport.py" }
-  const timer = () => ({ restart() {}, stop() {} })
-  const ctx = vm.createContext({ root, Engine, writes,
-    transport: { running: false, write: value => writes.push(JSON.parse(value)) },
+  const timer = () => ({ running: false, restart() { this.running = true }, stop() { this.running = false } })
+  const ctx = vm.createContext({ root, Engine, Protocol, writes,
+    Quickshell: { env: () => "/run/user/test" },
+    transport: { connected: false, flush() {}, destroy() { this.destroyed = true }, write: value => writes.push(JSON.parse(value)) },
     pasteProc: { running: false, requestToken: "" },
     startupTimer: timer(), shutdownTimer: timer(),
     Style: { font: { menuFamily: "monospace", body: 14 } },
     Qt: { font: value => value }
   })
+  ctx.transportComponent = { createObject: () => ctx.transport }
   for (const name of ["open", "printLine", "finish", "hideMenu", "transportStopped", "parseFont"]) {
     const start = qml.indexOf("  function " + name + "(")
     const end = qml.indexOf("\n  }", start) + 4
@@ -39,7 +42,7 @@ test("QML rejects malformed payloads and legacy arbitrary paths without side eff
     JSON.stringify({ token: "a".repeat(32) + "\n" })]) {
     ctx.root.open(payload)
     assert.equal(ctx.root.activeToken, "")
-    assert.equal(ctx.transport.running, false)
+    assert.equal(ctx.transport.connected, false)
     assert.equal(ctx.writes.length, 0)
   }
 })
@@ -49,7 +52,8 @@ test("QML accepts only a token and cannot replace an active request", () => {
   const first = "a".repeat(32)
   ctx.root.open(JSON.stringify({ token: first }))
   assert.equal(ctx.root.activeToken, first)
-  assert.deepEqual(Array.from(ctx.transport.command), ["python3", "-I", ctx.root.transportPath, "serve", first])
+  assert.equal(ctx.transport.path, "/run/user/test/omarchy-dynamic-menu/" + first + "/socket")
+  assert.equal(ctx.transport.connected, true)
   ctx.root.open(JSON.stringify({ token: "b".repeat(32) }))
   assert.equal(ctx.root.activeToken, first)
   assert.equal(ctx.writes.length, 0)
@@ -109,4 +113,62 @@ test("Ctrl+W rescans the item list once per word, including Unicode and trailing
   assert.equal(state.text, "keep ")
   assert.equal(state.cursor, 5)
   assert.equal(scans, 1)
+})
+
+
+test("horizontal pages stay bounded with long prompts, empty items and tiny screens", () => {
+  for (const width of [1, 20, 1728]) {
+    for (const measure of [() => 0, s => s.length * 10 + 20]) {
+      const state = Engine.create(Array(20000).fill(""), {
+        prompt: "p".repeat(1024), mw: width, lrpad: 20, textw: measure, match
+      })
+      for (const key of [null, "Next", "End", "Prior", "Home"]) {
+        if (key) Engine.keypress(state, { key })
+        const boxes = Engine.layout(state).boxes
+        assert.ok(boxes.filter(b => b.kind === "item").length <= 50)
+        assert.ok(boxes.every(b => b.width >= 0))
+      }
+    }
+  }
+})
+
+test("repeated query tokens scan each item once and case folding is not repeated", () => {
+  const original = String.prototype.indexOf
+  let searches = 0
+  String.prototype.indexOf = function(...args) { searches++; return original.apply(this, args) }
+  try {
+    assert.equal(match(Array(20000).fill("x".repeat(98) + "a"), "a ".repeat(4096), true).length, 20000)
+  } finally { String.prototype.indexOf = original }
+  assert.ok(searches <= 40000)
+  assert.deepEqual(match(["anything"], Array.from({length: 65}, (_, i) => "word" + i).join(" ")), [])
+})
+
+
+test("QML bounds queued output and destroys a stalled socket at its shutdown deadline", () => {
+  const ctx = context()
+  ctx.root.open(JSON.stringify({ token: "a".repeat(32) }))
+  ctx.root.printedBytes = 2 * 1024 * 1024 - 2
+  ctx.root.printLine("x")
+  ctx.root.printLine("overflow")
+  assert.deepEqual(ctx.writes, [{type: "output", text: "x"}, {type: "exit", status: 1}])
+  ctx.root.transportStopped()
+  assert.equal(ctx.transport.destroyed, true)
+  assert.equal(ctx.root.transport, null)
+  assert.equal(ctx.root.activeToken, "")
+})
+
+
+test("synchronous socket disconnect cannot leave a timer that closes the next menu", () => {
+  const ctx = context()
+  ctx.root.open(JSON.stringify({ token: "a".repeat(32) }))
+  Object.defineProperty(ctx.transport, "connected", {
+    set(value) { if (!value) ctx.root.transportStopped() },
+    get() { return false }
+  })
+  ctx.root.finish(0)
+  assert.equal(ctx.shutdownTimer.running, false)
+  assert.equal(ctx.root.transport, null)
+  ctx.root.open(JSON.stringify({ token: "b".repeat(32) }))
+  assert.equal(ctx.root.activeToken, "b".repeat(32))
+  assert.equal(ctx.shutdownTimer.running, false)
 })
